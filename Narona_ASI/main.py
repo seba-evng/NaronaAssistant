@@ -196,10 +196,16 @@ class NaronaAgent:
         if self._chat is None:
             memory = load_memory()
             history_context = format_memory_for_prompt(memory)
-            initial_system = _SYSTEM_PROMPT
             if history_context:
-                initial_system += f"\n\n{history_context}"
-            self._chat = self._model.start_chat()
+                chat_system = _SYSTEM_PROMPT + f"\n\n{history_context}"
+                chat_model = genai.GenerativeModel(
+                    model_name="gemini-2.5-flash",
+                    system_instruction=chat_system,
+                    tools=TOOL_DECLARATIONS,
+                )
+                self._chat = chat_model.start_chat()
+            else:
+                self._chat = self._model.start_chat()
 
         response = self._chat.send_message(user_text)
 

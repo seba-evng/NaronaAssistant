@@ -70,7 +70,6 @@ def capture():
 def _capture_real() -> Response:
     try:
         from PIL import Image  # type: ignore
-        import numpy as np
 
         frame = _picam.capture_array()
         img = Image.fromarray(frame)
@@ -78,8 +77,8 @@ def _capture_real() -> Response:
         img.save(buf, format="JPEG", quality=85)
         buf.seek(0)
         return Response(buf.read(), mimetype="image/jpeg")
-    except Exception as exc:
-        return Response(f"Error capturando imagen: {exc}", status=500)
+    except Exception:
+        return Response("Error capturing image", status=500)
 
 
 def _capture_simulated() -> Response:
