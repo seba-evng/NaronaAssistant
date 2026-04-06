@@ -7,7 +7,8 @@ import json
 import os
 import re
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # ---------------------------------------------------------------------------
 # Config
@@ -16,7 +17,7 @@ _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "api_keys
 with open(_CONFIG_PATH, encoding="utf-8") as _f:
     _cfg = json.load(_f)
 
-genai.configure(api_key=_cfg["gemini_api_key"])
+_client = genai.Client(api_key=_cfg["gemini_api_key"])
 
 # ---------------------------------------------------------------------------
 # Prompt del planificador
@@ -79,16 +80,16 @@ def create_plan(goal: str, context: str = "") -> dict:
     Returns:
         dict con claves "steps" y "direct_response".
     """
-    model = genai.GenerativeModel(
-        model_name="gemini-2.5-flash",
-        system_instruction=PLANNER_PROMPT,
-    )
     user_prompt = f"Objetivo: {goal}"
     if context:
         user_prompt += f"\nContexto: {context}"
 
     try:
-        response = model.generate_content(user_prompt)
+        response = _client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=user_prompt,
+            config=types.GenerateContentConfig(system_instruction=PLANNER_PROMPT),
+        )
         raw = response.text.strip()
         # Extraer JSON de posible markdown
         json_match = re.search(r"\{.*\}", raw, re.DOTALL)

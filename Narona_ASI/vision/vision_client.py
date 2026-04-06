@@ -6,17 +6,19 @@ System prompt adaptado para NARONA (robot para niños).
 import json
 import os
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "api_keys.json")
 
+_client: genai.Client | None = None
 try:
     with open(_CONFIG_PATH, encoding="utf-8") as _f:
         _cfg = json.load(_f)
-    genai.configure(api_key=_cfg["gemini_api_key"])
+    _client = genai.Client(api_key=_cfg["gemini_api_key"])
 except Exception as _e:
     print(f"[vision_client] No se pudo cargar api_keys.json: {_e}")
 
@@ -46,12 +48,16 @@ def analyze_image(image_bytes: bytes, question: str = "¿Qué ves en la imagen?"
         Descripción textual generada por Gemini.
     """
     try:
-        model = genai.GenerativeModel(
-            model_name=_MODEL_NAME,
-            system_instruction=_VISION_SYSTEM_PROMPT,
+        if _client is None:
+            return "Error: cliente de visión no inicializado (falta api_keys.json)"
+        response = _client.models.generate_content(
+            model=_MODEL_NAME,
+            contents=[
+                types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                question,
+            ],
+            config=types.GenerateContentConfig(system_instruction=_VISION_SYSTEM_PROMPT),
         )
-        image_part = {"mime_type": "image/jpeg", "data": image_bytes}
-        response = model.generate_content([question, image_part])
         return response.text.strip()
     except Exception as exc:
         return f"Error analizando imagen: {exc}"
