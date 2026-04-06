@@ -10,8 +10,8 @@ import threading
 import time
 from typing import Optional
 
-import google.generativeai as genai
-from google.generativeai import types as genai_types
+from google import genai
+from google.genai import types
 
 from ui.audio_input import listen_loop
 from ui.audio_output import speak, speak_async
@@ -28,8 +28,6 @@ _PROMPT_PATH = os.path.join(_BASE_DIR, "core", "prompt.txt")
 with open(_CONFIG_PATH, encoding="utf-8") as _f:
     _cfg = json.load(_f)
 
-genai.configure(api_key=_cfg["gemini_api_key"])
-
 with open(_PROMPT_PATH, encoding="utf-8") as _f:
     _SYSTEM_PROMPT = _f.read().strip()
 
@@ -37,98 +35,70 @@ with open(_PROMPT_PATH, encoding="utf-8") as _f:
 # TOOL_DECLARATIONS – sin IMU
 # ---------------------------------------------------------------------------
 TOOL_DECLARATIONS = [
-    genai_types.Tool(
-        function_declarations=[
-            genai_types.FunctionDeclaration(
-                name="robot_control",
-                description=(
-                    "Controla los motores del robot. "
-                    "Úsalo para mover el robot hacia adelante, atrás, girar o parar."
-                ),
-                parameters=genai_types.Schema(
-                    type=genai_types.Type.OBJECT,
-                    properties={
-                        "action": genai_types.Schema(
-                            type=genai_types.Type.STRING,
-                            description="Acción: forward | backward | left | right | stop",
-                        ),
-                        "speed": genai_types.Schema(
-                            type=genai_types.Type.NUMBER,
-                            description="Velocidad entre 0.0 y 1.0 (default 0.5)",
-                        ),
-                        "duration": genai_types.Schema(
-                            type=genai_types.Type.NUMBER,
-                            description="Duración en segundos (default 1.0)",
-                        ),
-                    },
-                    required=["action"],
-                ),
-            ),
-            genai_types.FunctionDeclaration(
-                name="sensor_read",
-                description=(
-                    "Lee sensores del robot. "
-                    "Sensores disponibles: distance (HC-SR04), temperature (MLX90614)."
-                ),
-                parameters=genai_types.Schema(
-                    type=genai_types.Type.OBJECT,
-                    properties={
-                        "sensor": genai_types.Schema(
-                            type=genai_types.Type.STRING,
-                            description="Sensor: distance | temperature | all",
-                        ),
-                    },
-                    required=["sensor"],
-                ),
-            ),
-            genai_types.FunctionDeclaration(
-                name="camera_remote",
-                description=(
-                    "Captura una imagen desde la cámara de la Pi Zero y la analiza "
-                    "con visión artificial."
-                ),
-                parameters=genai_types.Schema(
-                    type=genai_types.Type.OBJECT,
-                    properties={
-                        "text": genai_types.Schema(
-                            type=genai_types.Type.STRING,
-                            description="Pregunta o descripción para el análisis visual",
-                        ),
-                        "save": genai_types.Schema(
-                            type=genai_types.Type.BOOLEAN,
-                            description="Guardar imagen en disco (default false)",
-                        ),
-                        "timeout": genai_types.Schema(
-                            type=genai_types.Type.INTEGER,
-                            description="Segundos de espera para la cámara (default 5)",
-                        ),
-                    },
-                    required=["text"],
-                ),
-            ),
-            genai_types.FunctionDeclaration(
-                name="agent_task",
-                description=(
-                    "Delega un objetivo complejo a un sub-agente que lo planifica "
-                    "y ejecuta paso a paso."
-                ),
-                parameters=genai_types.Schema(
-                    type=genai_types.Type.OBJECT,
-                    properties={
-                        "goal": genai_types.Schema(
-                            type=genai_types.Type.STRING,
-                            description="Objetivo de alto nivel para el sub-agente",
-                        ),
-                        "priority": genai_types.Schema(
-                            type=genai_types.Type.STRING,
-                            description="Prioridad: low | normal | high (default normal)",
-                        ),
-                    },
-                    required=["goal"],
-                ),
-            ),
-        ]
-    )
+    {
+        "name": "robot_control",
+        "description": (
+            "Controla los motores del robot NARONA. "
+            "Úsalo para mover el robot: adelante, atrás, girar o parar. "
+            "SIEMPRE llama esta herramienta — nunca simules el movimiento."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action":   {"type": "STRING", "description": "forward | backward | left | right | stop"},
+                "speed":    {"type": "NUMBER", "description": "Velocidad 0.0–1.0 (default 0.5)"},
+                "duration": {"type": "NUMBER", "description": "Duración en segundos (default 1.0)"},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "sensor_read",
+        "description": (
+            "Lee sensores físicos del robot. "
+            "Úsalo para medir la distancia a obstáculos o la temperatura del entorno."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "sensor": {"type": "STRING", "description": "distance | temperature | all (default: distance)"},
+            },
+            "required": ["sensor"],
+        },
+    },
+    {
+        "name": "camera_remote",
+        "description": (
+            "Captura una imagen desde la cámara de la Pi Zero y la analiza. "
+            "Úsalo cuando necesites ver el entorno. "
+            "NUNCA tienes visión sin llamar esta herramienta."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "text":    {"type": "STRING",  "description": "Pregunta o descripción para el análisis visual"},
+                "save":    {"type": "BOOLEAN", "description": "Guardar imagen en disco (default false)"},
+                "timeout": {"type": "INTEGER", "description": "Segundos de espera para la cámara (default 5)"},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "agent_task",
+        "description": (
+            "Delega un objetivo complejo de múltiples pasos a un sub-agente. "
+            "Úsalo para tareas como 'avanza hasta detectar un obstáculo'. "
+            "NO uses para acciones simples de un solo paso."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "goal":     {"type": "STRING", "description": "Objetivo completo para el sub-agente"},
+                "priority": {"type": "STRING", "description": "low | normal | high (default normal)"},
+            },
+            "required": ["goal"],
+        },
+    },
 ]
 
 
@@ -140,11 +110,8 @@ class NaronaAgent:
     """Orquestador principal del robot NARONA."""
 
     def __init__(self):
-        self._model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            system_instruction=_SYSTEM_PROMPT,
-            tools=TOOL_DECLARATIONS,
-        )
+        self._client = genai.Client(api_key=_cfg["gemini_api_key"])
+        self._model_name = "gemini-2.5-flash"
         self._chat = None
         self._audio_queue: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
@@ -196,42 +163,40 @@ class NaronaAgent:
         if self._chat is None:
             memory = load_memory()
             history_context = format_memory_for_prompt(memory)
+            system = _SYSTEM_PROMPT
             if history_context:
-                chat_system = _SYSTEM_PROMPT + f"\n\n{history_context}"
-                chat_model = genai.GenerativeModel(
-                    model_name="gemini-2.5-flash",
-                    system_instruction=chat_system,
-                    tools=TOOL_DECLARATIONS,
-                )
-                self._chat = chat_model.start_chat()
-            else:
-                self._chat = self._model.start_chat()
+                system = history_context + "\n\n" + system
+            self._chat = self._client.chats.create(
+                model=self._model_name,
+                config=types.GenerateContentConfig(
+                    system_instruction=system,
+                    tools=[{"function_declarations": TOOL_DECLARATIONS}],
+                ),
+            )
 
         response = self._chat.send_message(user_text)
 
         # Ciclo de tool calls
-        while response.candidates:
-            candidate = response.candidates[0]
-            part = candidate.content.parts[0] if candidate.content.parts else None
+        while True:
+            part = response.candidates[0].content.parts[0] if (
+                response.candidates and response.candidates[0].content.parts
+            ) else None
 
             if part is None:
                 break
 
-            # Tool call
-            if hasattr(part, "function_call") and part.function_call.name:
+            if hasattr(part, "function_call") and part.function_call and part.function_call.name:
                 fc = part.function_call
                 tool_result = self._execute_tool(fc)
-                # Enviar resultado de vuelta
                 response = self._chat.send_message(
-                    genai_types.Part.from_function_response(
+                    types.Part.from_function_response(
                         name=fc.name,
                         response={"result": tool_result},
                     )
                 )
             else:
-                # Respuesta de texto final
-                text = candidate.content.parts[0].text if candidate.content.parts else ""
-                if text.strip():
+                text = part.text if hasattr(part, "text") else ""
+                if text and text.strip():
                     speak(text.strip())
                     update_memory({"last_response": text.strip()})
                 break
