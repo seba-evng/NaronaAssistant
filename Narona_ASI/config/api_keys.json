@@ -1,0 +1,19 @@
+{
+    "gemini_api_key": "TU_API_KEY_AQUI",
+    "pi_zero_ip": "192.168.1.101",
+    "pi_zero_port": 5001,
+    "stt_language": "es-ES",
+    "tts_language": "es",
+    "tts_rate": 140,
+    "tts_volume": 1.0,
+    "motor_pins": {
+        "left_forward":  17,
+        "left_backward": 27,
+        "right_forward": 22,
+        "right_backward": 23
+    },
+    "ultrasonic_pins": {
+        "trigger": 5,
+        "echo": 6
+    }
+}
