@@ -7,17 +7,19 @@ import json
 import os
 from typing import Optional
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "api_keys.json")
 
+_client: genai.Client | None = None
 try:
     with open(_CONFIG_PATH, encoding="utf-8") as _f:
         _cfg = json.load(_f)
-    genai.configure(api_key=_cfg["gemini_api_key"])
+    _client = genai.Client(api_key=_cfg["gemini_api_key"])
 except Exception as _e:
     print(f"[code_helper] No se pudo cargar api_keys.json: {_e}")
 
@@ -63,11 +65,13 @@ def code_helper(parameters: dict, response=None, player=None) -> str:
     prompt = _build_prompt(action, description, language, file_content)
 
     try:
-        model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            system_instruction=_SYSTEM_PROMPT,
+        if _client is None:
+            return "Error: cliente de código no inicializado (falta api_keys.json)"
+        result = _client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(system_instruction=_SYSTEM_PROMPT),
         )
-        result = model.generate_content(prompt)
         return result.text.strip()
     except Exception as exc:
         return f"Error en code_helper: {exc}"
