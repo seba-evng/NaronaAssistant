@@ -8,6 +8,7 @@ import os
 import queue
 import threading
 import time
+import traceback
 from typing import Optional
 
 from google import genai
@@ -159,47 +160,74 @@ class NaronaAgent:
     # ------------------------------------------------------------------
 
     def _process_text(self, user_text: str) -> None:
-        """Procesa el texto del usuario y genera la respuesta."""
-        if self._chat is None:
-            memory = load_memory()
-            history_context = format_memory_for_prompt(memory)
-            system = _SYSTEM_PROMPT
-            if history_context:
-                system = history_context + "\n\n" + system
-            self._chat = self._client.chats.create(
-                model=self._model_name,
-                config=types.GenerateContentConfig(
-                    system_instruction=system,
-                    tools=[{"function_declarations": TOOL_DECLARATIONS}],
-                ),
-            )
-
-        response = self._chat.send_message(user_text)
-
-        # Ciclo de tool calls
-        while True:
-            part = response.candidates[0].content.parts[0] if (
-                response.candidates and response.candidates[0].content.parts
-            ) else None
-
-            if part is None:
-                break
-
-            if hasattr(part, "function_call") and part.function_call and part.function_call.name:
-                fc = part.function_call
-                tool_result = self._execute_tool(fc)
-                response = self._chat.send_message(
-                    types.Part.from_function_response(
-                        name=fc.name,
-                        response={"result": tool_result},
-                    )
+        try:
+            if self._chat is None:
+                memory = load_memory()
+                history_context = format_memory_for_prompt(memory)
+                system = _SYSTEM_PROMPT
+                if history_context:
+                    system = history_context + "\n\n" + system
+                self._chat = self._client.chats.create(
+                    model=self._model_name,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system,
+                        tools=[{"function_declarations": TOOL_DECLARATIONS}],
+                    ),
                 )
-            else:
-                text = part.text if hasattr(part, "text") else ""
-                if text and text.strip():
-                    speak(text.strip())
-                    update_memory({"last_response": text.strip()})
-                break
+
+            response = self._chat.send_message(user_text)
+
+            for _ in range(5):
+                fc = None
+                if response.candidates:
+                    for candidate in response.candidates:
+                        if candidate.content and candidate.content.parts:
+                            for part in candidate.content.parts:
+                                if (
+                                    hasattr(part, "function_call")
+                                    and part.function_call is not None
+                                    and getattr(part.function_call, "name", None)
+                                ):
+                                    fc = part.function_call
+                                    break
+                        if fc:
+                            break
+
+                if fc:
+                    print(f"[NARONA] Tool call: {fc.name}")
+                    tool_result = self._execute_tool(fc)
+                    print(f"[NARONA] {fc.name} result: {str(tool_result)[:80]}")
+                    response = self._chat.send_message(
+                        types.Part.from_function_response(
+                            name=fc.name,
+                            response={"result": tool_result},
+                        )
+                    )
+                else:
+                    text = ""
+                    try:
+                        text = response.text or ""
+                    except Exception:
+                        if response.candidates:
+                            for candidate in response.candidates:
+                                if candidate.content and candidate.content.parts:
+                                    for part in candidate.content.parts:
+                                        if hasattr(part, "text") and part.text:
+                                            text += part.text
+
+                    text = text.strip()
+                    if text:
+                        print(f"[NARONA] Speaking: {text[:120]}")
+                        speak(text)
+                        update_memory({"last_response": text})
+                    else:
+                        print("[NARONA] Warning: empty response from LLM")
+                    break
+
+        except Exception as exc:
+            print(f"[NARONA] Error in _process_text: {exc}")
+            traceback.print_exc()
+            self._chat = None
 
     def _listen_audio(self) -> None:
         """Bucle STT que pone texto en la cola de audio."""
@@ -209,16 +237,18 @@ class NaronaAgent:
         listen_loop(callback, self._stop_event)
 
     def _receive_audio(self) -> None:
-        """Saca texto de la cola y lo procesa."""
         while not self._stop_event.is_set():
             try:
                 user_text = self._audio_queue.get(timeout=1)
-                print(f"[NARONA] Usuario dijo: {user_text}")
+                print(f"[NARONA] User said: {user_text!r}")
                 self._process_text(user_text)
             except queue.Empty:
                 continue
+            except KeyboardInterrupt:
+                raise
             except Exception as exc:
-                print(f"[NARONA] Error procesando mensaje: {exc}")
+                print(f"[NARONA] Error in _receive_audio: {exc}")
+                traceback.print_exc()
                 time.sleep(1)
 
     # ------------------------------------------------------------------
