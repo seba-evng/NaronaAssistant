@@ -85,6 +85,28 @@ TOOL_DECLARATIONS = [
         },
     },
     {
+        "name": "open_app",
+        "description": (
+            "Abre una aplicación, programa o juego en la computadora. "
+            "Úsalo cuando el niño pida abrir cualquier app. "
+            "SIEMPRE llama esta herramienta — nunca digas que abriste algo sin llamarla."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "app_name": {
+                    "type": "STRING",
+                    "description": "Nombre de la aplicación a abrir, por ejemplo: WhatsApp, Chrome, Spotify, Minecraft"
+                },
+                "platform": {
+                    "type": "STRING",
+                    "description": "Sistema operativo: windows (default) | linux | macos"
+                },
+            },
+            "required": ["app_name"],
+        },
+    },
+    {
         "name": "agent_task",
         "description": (
             "Delega un objetivo complejo de múltiples pasos a un sub-agente. "
@@ -137,6 +159,10 @@ class NaronaAgent:
         elif name == "camera_remote":
             from actions.camera_remote import camera_remote
             return camera_remote(params, None, None)
+
+        elif name == "open_app":
+            from actions.open_app import open_app
+            return open_app(params, None, None)
 
         elif name == "agent_task":
             goal     = str(params.get("goal", ""))
@@ -257,10 +283,12 @@ class NaronaAgent:
 
     def run(self) -> None:
         """Inicia el agente y lo mantiene activo con reconexión automática."""
-        speak("¡Hola! Soy NARONA. ¿En qué te puedo ayudar hoy?")
-
+        # Primero iniciar el listener, LUEGO hablar el saludo
         listen_thread = threading.Thread(target=self._listen_audio, daemon=True)
         listen_thread.start()
+
+        # Saludo inicial — solo una vez
+        speak("¡Hola! ¡Soy NARONA, tu robot amigo! ¿En qué te puedo ayudar hoy? 😊")
 
         while not self._stop_event.is_set():
             try:
@@ -271,8 +299,8 @@ class NaronaAgent:
                 break
             except Exception as exc:
                 print(f"[NARONA] Error en bucle principal, reconectando: {exc}")
+                traceback.print_exc()
                 time.sleep(2)
-                # Reiniciar chat en caso de error de API
                 self._chat = None
 
         speak("¡Hasta luego! Cuídate mucho.")
