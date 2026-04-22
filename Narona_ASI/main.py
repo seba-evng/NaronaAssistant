@@ -16,6 +16,7 @@ from google.genai import types
 
 from ui.audio_input import listen_loop
 from ui.audio_output import speak, speak_async
+from ui.command_interceptor import try_intercept
 from memory.memory_manager import load_memory, update_memory, format_memory_for_prompt
 from agent.task_queue import get_queue, Task
 
@@ -267,6 +268,14 @@ class NaronaAgent:
             try:
                 user_text = self._audio_queue.get(timeout=1)
                 print(f"[NARONA] User said: {user_text!r}")
+
+                # ── Interceptor local (sin API) ────────────────────────────
+                # Comandos simples como "abre Chrome" se resuelven aquí
+                # directamente con Python, sin gastar tokens del LLM.
+                if try_intercept(user_text, speak):
+                    continue  # ya fue manejado, no llamar al LLM
+
+                # ── Resto de comandos → LLM ────────────────────────────────
                 self._process_text(user_text)
             except queue.Empty:
                 continue
@@ -283,12 +292,14 @@ class NaronaAgent:
 
     def run(self) -> None:
         """Inicia el agente y lo mantiene activo con reconexión automática."""
-        # Primero iniciar el listener, LUEGO hablar el saludo
+        # ── Saludo inicial ────────────────────────────────────────────────────
+        # IMPORTANTE: el listener se inicia DESPUÉS del saludo para que el
+        # micrófono no capte la voz de NARONA y la reenvíe como input del usuario.
+        speak("¡Hola! ¡Soy NARONA, tu robot amigo! ¿En qué te puedo ayudar hoy?")
+
+        # ── Iniciar escucha continua DESPUÉS del saludo ───────────────────────
         listen_thread = threading.Thread(target=self._listen_audio, daemon=True)
         listen_thread.start()
-
-        # Saludo inicial — solo una vez
-        speak("¡Hola! ¡Soy NARONA, tu robot amigo! ¿En qué te puedo ayudar hoy? 😊")
 
         while not self._stop_event.is_set():
             try:
