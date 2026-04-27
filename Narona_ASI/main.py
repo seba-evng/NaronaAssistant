@@ -1,29 +1,36 @@
 """
-main.py – Orquestador principal de NARONA.
+main.py - Orquestador principal de NARONA.
 Arquitectura basada en FatihMakes/Mark-XXX.
 """
 
 import json
 import os
 import queue
+import re
 import threading
 import time
 import traceback
-from typing import Optional
 
 from google import genai
 from google.genai import types
 
-from ui.audio_input import listen_loop
-from ui.audio_output import speak, speak_async
+from agent.task_queue import Task, get_queue
+from memory.memory_manager import (
+    format_memory_for_prompt,
+    get_child_profile,
+    get_missing_child_profile_fields,
+    load_memory,
+    update_child_profile,
+    update_memory,
+)
+from ui.audio_input import listen_loop, listen_once
+from ui.audio_output import speak
 from ui.command_interceptor import try_intercept
-from memory.memory_manager import load_memory, update_memory, format_memory_for_prompt
-from agent.task_queue import get_queue, Task
 
 # ---------------------------------------------------------------------------
-# Configuración
+# Configuracion
 # ---------------------------------------------------------------------------
-_BASE_DIR    = os.path.dirname(__file__)
+_BASE_DIR = os.path.dirname(__file__)
 _CONFIG_PATH = os.path.join(_BASE_DIR, "config", "api_keys.json")
 _PROMPT_PATH = os.path.join(_BASE_DIR, "core", "prompt.txt")
 
@@ -33,23 +40,24 @@ with open(_CONFIG_PATH, encoding="utf-8") as _f:
 with open(_PROMPT_PATH, encoding="utf-8") as _f:
     _SYSTEM_PROMPT = _f.read().strip()
 
+
 # ---------------------------------------------------------------------------
-# TOOL_DECLARATIONS – sin IMU
+# TOOL_DECLARATIONS - sin IMU
 # ---------------------------------------------------------------------------
 TOOL_DECLARATIONS = [
     {
         "name": "robot_control",
         "description": (
             "Controla los motores del robot NARONA. "
-            "Úsalo para mover el robot: adelante, atrás, girar o parar. "
-            "SIEMPRE llama esta herramienta — nunca simules el movimiento."
+            "Usalo para mover el robot: adelante, atras, girar o parar. "
+            "SIEMPRE llama esta herramienta, nunca simules el movimiento."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":   {"type": "STRING", "description": "forward | backward | left | right | stop"},
-                "speed":    {"type": "NUMBER", "description": "Velocidad 0.0–1.0 (default 0.5)"},
-                "duration": {"type": "NUMBER", "description": "Duración en segundos (default 1.0)"},
+                "action": {"type": "STRING", "description": "forward | backward | left | right | stop"},
+                "speed": {"type": "NUMBER", "description": "Velocidad 0.0-1.0 (default 0.5)"},
+                "duration": {"type": "NUMBER", "description": "Duracion en segundos (default 1.0)"},
             },
             "required": ["action"],
         },
@@ -57,8 +65,8 @@ TOOL_DECLARATIONS = [
     {
         "name": "sensor_read",
         "description": (
-            "Lee sensores físicos del robot. "
-            "Úsalo para medir la distancia a obstáculos o la temperatura del entorno."
+            "Lee sensores fisicos del robot. "
+            "Usalo para medir la distancia a obstaculos o la temperatura del entorno."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -71,16 +79,16 @@ TOOL_DECLARATIONS = [
     {
         "name": "camera_remote",
         "description": (
-            "Captura una imagen desde la cámara de la Pi Zero y la analiza. "
-            "Úsalo cuando necesites ver el entorno. "
-            "NUNCA tienes visión sin llamar esta herramienta."
+            "Captura una imagen desde la camara del robot y la analiza. "
+            "Usala cuando necesites ver el entorno. "
+            "NUNCA tienes vision sin llamar esta herramienta."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "text":    {"type": "STRING",  "description": "Pregunta o descripción para el análisis visual"},
-                "save":    {"type": "BOOLEAN", "description": "Guardar imagen en disco (default false)"},
-                "timeout": {"type": "INTEGER", "description": "Segundos de espera para la cámara (default 5)"},
+                "text": {"type": "STRING", "description": "Pregunta o descripcion para el analisis visual"},
+                "save": {"type": "BOOLEAN", "description": "Guardar imagen en disco (default false)"},
+                "timeout": {"type": "INTEGER", "description": "Segundos de espera para la camara (default 5)"},
             },
             "required": ["text"],
         },
@@ -88,20 +96,20 @@ TOOL_DECLARATIONS = [
     {
         "name": "open_app",
         "description": (
-            "Abre una aplicación, programa o juego en la computadora. "
-            "Úsalo cuando el niño pida abrir cualquier app. "
-            "SIEMPRE llama esta herramienta — nunca digas que abriste algo sin llamarla."
+            "Abre una aplicacion, programa o juego en la computadora. "
+            "Usala cuando el nino pida abrir cualquier app. "
+            "SIEMPRE llama esta herramienta, nunca digas que abriste algo sin llamarla."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "app_name": {
                     "type": "STRING",
-                    "description": "Nombre de la aplicación a abrir, por ejemplo: WhatsApp, Chrome, Spotify, Minecraft"
+                    "description": "Nombre de la aplicacion a abrir, por ejemplo: WhatsApp, Chrome, Spotify, Minecraft",
                 },
                 "platform": {
                     "type": "STRING",
-                    "description": "Sistema operativo: windows (default) | linux | macos"
+                    "description": "Sistema operativo: windows (default) | linux | macos",
                 },
             },
             "required": ["app_name"],
@@ -110,14 +118,14 @@ TOOL_DECLARATIONS = [
     {
         "name": "agent_task",
         "description": (
-            "Delega un objetivo complejo de múltiples pasos a un sub-agente. "
-            "Úsalo para tareas como 'avanza hasta detectar un obstáculo'. "
-            "NO uses para acciones simples de un solo paso."
+            "Delega un objetivo complejo de multiples pasos a un sub-agente. "
+            "Usalo para tareas como 'avanza hasta detectar un obstaculo'. "
+            "NO lo uses para acciones simples de un solo paso."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "goal":     {"type": "STRING", "description": "Objetivo completo para el sub-agente"},
+                "goal": {"type": "STRING", "description": "Objetivo completo para el sub-agente"},
                 "priority": {"type": "STRING", "description": "low | normal | high (default normal)"},
             },
             "required": ["goal"],
@@ -125,10 +133,6 @@ TOOL_DECLARATIONS = [
     },
 ]
 
-
-# ---------------------------------------------------------------------------
-# Clase NaronaAgent
-# ---------------------------------------------------------------------------
 
 class NaronaAgent:
     """Orquestador principal del robot NARONA."""
@@ -143,61 +147,199 @@ class NaronaAgent:
     # ------------------------------------------------------------------
     # Herramientas internas
     # ------------------------------------------------------------------
-
     def _execute_tool(self, fc) -> str:
-        """Despacha una FunctionCall al módulo Python correspondiente."""
-        name   = fc.name
+        """Despacha una FunctionCall al modulo Python correspondiente."""
+        name = fc.name
         params = dict(fc.args)
 
         if name == "robot_control":
             from actions.robot_control import robot_control
+
             return robot_control(params, None, None)
 
-        elif name == "sensor_read":
+        if name == "sensor_read":
             from actions.sensor_read import sensor_read
+
             return sensor_read(params, None, None)
 
-        elif name == "camera_remote":
+        if name == "camera_remote":
             from actions.camera_remote import camera_remote
+
             return camera_remote(params, None, None)
 
-        elif name == "open_app":
+        if name == "open_app":
             from actions.open_app import open_app
+
             return open_app(params, None, None)
 
-        elif name == "agent_task":
-            goal     = str(params.get("goal", ""))
+        if name == "agent_task":
+            goal = str(params.get("goal", ""))
             priority = str(params.get("priority", "normal"))
             task = Task.from_priority_name(goal=goal, priority_name=priority, speak=speak)
             task_id = get_queue().enqueue(task)
-            # Esperar resultado (máximo 60s)
             deadline = time.time() + 60
             while time.time() < deadline:
                 result = get_queue().get_result(task_id)
                 if result is not None:
                     return result
                 time.sleep(0.5)
-            return "La tarea está en progreso pero tardará más de lo esperado."
+            return "La tarea esta en progreso pero tardara mas de lo esperado."
 
+        return f"Herramienta desconocida: {name}"
+
+    # ------------------------------------------------------------------
+    # Ciclo de conversacion
+    # ------------------------------------------------------------------
+    def _build_system_prompt(self) -> str:
+        """Construye el system prompt con memoria actualizada."""
+        memory = load_memory()
+        history_context = format_memory_for_prompt(memory)
+        if history_context:
+            return history_context + "\n\n" + _SYSTEM_PROMPT
+        return _SYSTEM_PROMPT
+
+    def _reset_chat(self) -> None:
+        """Fuerza a recrear el chat con memoria fresca."""
+        self._chat = None
+
+    def _clean_text(self, value) -> str:
+        """Normaliza una respuesta de voz para procesarla mejor."""
+        text = str(value or "").strip()
+        text = text.replace("?", " ").replace("!", " ").replace(".", " ").replace(",", " ")
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    def _normalize_name(self, value) -> str:
+        """Extrae solo el nombre de respuestas como 'me llamo Diego'."""
+        text = self._clean_text(value)
+        lowered = text.lower()
+
+        prefixes = [
+            "me llamo ",
+            "mi nombre es ",
+            "soy ",
+            "yo soy ",
+            "me dicen ",
+            "yo me llamo ",
+        ]
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                text = text[len(prefix):].strip()
+                break
+
+        tokens = []
+        for token in text.split():
+            clean_token = re.sub(r"[^A-Za-zÁÉÍÓÚáéíóúÑñÜü-]", "", token)
+            if clean_token:
+                tokens.append(clean_token)
+
+        if not tokens:
+            return ""
+
+        return " ".join(token.capitalize() for token in tokens[:3])
+
+    def _normalize_age(self, value) -> str:
+        """Extrae una edad valida desde texto libre."""
+        text = self._clean_text(value).lower()
+        digit_match = re.search(r"\d{1,2}", text)
+        if digit_match:
+            age = int(digit_match.group())
+            if 3 <= age <= 17:
+                return str(age)
+            return ""
+
+        number_words = {
+            "tres": 3,
+            "cuatro": 4,
+            "cinco": 5,
+            "seis": 6,
+            "siete": 7,
+            "ocho": 8,
+            "nueve": 9,
+            "diez": 10,
+            "once": 11,
+            "doce": 12,
+            "trece": 13,
+            "catorce": 14,
+            "quince": 15,
+            "dieciseis": 16,
+            "dieciséis": 16,
+            "diecisiete": 17,
+        }
+        for word, age in number_words.items():
+            if re.search(rf"\b{re.escape(word)}\b", text):
+                return str(age)
+        return ""
+
+    def _normalize_likes(self, value) -> list[str]:
+        """Extrae una lista de gustos desde una respuesta libre."""
+        if isinstance(value, list):
+            raw_items = value
         else:
-            return f"Herramienta desconocida: {name}"
+            text = self._clean_text(value)
+            lowered = text.lower()
 
-    # ------------------------------------------------------------------
-    # Ciclo de conversación
-    # ------------------------------------------------------------------
+            prefixes = [
+                "me gusta ",
+                "me gustan ",
+                "mis cosas favoritas son ",
+                "mis favoritos son ",
+                "me encanta ",
+                "me encantan ",
+            ]
+            for prefix in prefixes:
+                if lowered.startswith(prefix):
+                    text = text[len(prefix):].strip()
+                    break
+
+            text = re.sub(r"\s+y\s+", ",", text, flags=re.IGNORECASE)
+            raw_items = re.split(r"[;,/]|,", text)
+
+        likes = []
+        seen = set()
+        for item in raw_items:
+            cleaned = item.strip(" .")
+            cleaned = re.sub(r"^(el|la|los|las|un|una)\s+", "", cleaned, flags=re.IGNORECASE)
+            if len(cleaned) < 2:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            likes.append(cleaned)
+
+        return likes[:5]
+
+    def _sanitize_child_profile(self) -> dict:
+        """Limpia el perfil guardado y elimina datos invalidos."""
+        memory = load_memory()
+        profile = get_child_profile(memory)
+        sanitized_profile = {}
+
+        name = self._normalize_name(profile.get("name", ""))
+        age = self._normalize_age(profile.get("age", ""))
+        likes = self._normalize_likes(profile.get("likes", ""))
+
+        if name:
+            sanitized_profile["name"] = name
+        if age:
+            sanitized_profile["age"] = age
+        if len(likes) >= 3:
+            sanitized_profile["likes"] = likes
+
+        if sanitized_profile != profile:
+            update_memory({"child_profile": sanitized_profile})
+            self._reset_chat()
+
+        return sanitized_profile
 
     def _process_text(self, user_text: str) -> None:
         try:
             if self._chat is None:
-                memory = load_memory()
-                history_context = format_memory_for_prompt(memory)
-                system = _SYSTEM_PROMPT
-                if history_context:
-                    system = history_context + "\n\n" + system
                 self._chat = self._client.chats.create(
                     model=self._model_name,
                     config=types.GenerateContentConfig(
-                        system_instruction=system,
+                        system_instruction=self._build_system_prompt(),
                         tools=[{"function_declarations": TOOL_DECLARATIONS}],
                     ),
                 )
@@ -230,26 +372,27 @@ class NaronaAgent:
                             response={"result": tool_result},
                         )
                     )
-                else:
-                    text = ""
-                    try:
-                        text = response.text or ""
-                    except Exception:
-                        if response.candidates:
-                            for candidate in response.candidates:
-                                if candidate.content and candidate.content.parts:
-                                    for part in candidate.content.parts:
-                                        if hasattr(part, "text") and part.text:
-                                            text += part.text
+                    continue
 
-                    text = text.strip()
-                    if text:
-                        print(f"[NARONA] Speaking: {text[:120]}")
-                        speak(text)
-                        update_memory({"last_response": text})
-                    else:
-                        print("[NARONA] Warning: empty response from LLM")
-                    break
+                text = ""
+                try:
+                    text = response.text or ""
+                except Exception:
+                    if response.candidates:
+                        for candidate in response.candidates:
+                            if candidate.content and candidate.content.parts:
+                                for part in candidate.content.parts:
+                                    if hasattr(part, "text") and part.text:
+                                        text += part.text
+
+                text = text.strip()
+                if text:
+                    print(f"[NARONA] Speaking: {text[:120]}")
+                    speak(text)
+                    update_memory({"last_response": text})
+                else:
+                    print("[NARONA] Warning: empty response from LLM")
+                break
 
         except Exception as exc:
             print(f"[NARONA] Error in _process_text: {exc}")
@@ -258,10 +401,95 @@ class NaronaAgent:
 
     def _listen_audio(self) -> None:
         """Bucle STT que pone texto en la cola de audio."""
+
         def callback(text: str):
             self._audio_queue.put(text)
 
         listen_loop(callback, self._stop_event)
+
+    def _collect_profile_value(self, prompt: str, timeout: int = 8, phrase_limit: int = 8) -> str:
+        """Pregunta un dato del perfil y escucha una respuesta breve."""
+        for attempt in range(2):
+            speak(prompt)
+            time.sleep(1.0)
+            answer = listen_once(timeout=timeout, phrase_limit=phrase_limit).strip()
+            if answer:
+                print(f"[NARONA] Perfil captado: {answer!r}")
+                return answer
+            if attempt == 0:
+                speak("No te escuche bien. Dime otra vez, por favor.")
+                time.sleep(0.8)
+        return ""
+
+    def _collect_name(self) -> str:
+        """Pregunta el nombre hasta obtener uno limpio."""
+        for attempt in range(3):
+            answer = self._collect_profile_value("Como te llamas?")
+            name = self._normalize_name(answer)
+            if name:
+                return name
+            if attempt < 2:
+                speak("Dime solo tu nombre, por favor.")
+                time.sleep(0.8)
+        return ""
+
+    def _collect_age(self) -> str:
+        """Pregunta la edad hasta obtener un numero valido."""
+        for attempt in range(3):
+            answer = self._collect_profile_value("Cuantos anos tienes?")
+            age = self._normalize_age(answer)
+            if age:
+                return age
+            if attempt < 2:
+                speak("Dime solo tu edad con un numero corto, por favor.")
+                time.sleep(0.8)
+        return ""
+
+    def _collect_likes(self) -> list[str]:
+        """Pregunta gustos una sola vez y guarda solo si hay al menos tres."""
+        answer = self._collect_profile_value("Dime tres cosas que te gusten mucho.")
+        likes = self._normalize_likes(answer)
+        if len(likes) >= 3:
+            return likes
+        return []
+
+    def _run_profile_onboarding(self) -> None:
+        """Pregunta datos del nino solo si faltan en memoria."""
+        self._sanitize_child_profile()
+        memory = load_memory()
+        missing_fields = get_missing_child_profile_fields(memory)
+        if not missing_fields:
+            return
+
+        profile = get_child_profile(memory)
+        speak("Quiero conocerte un poquito.")
+        time.sleep(0.5)
+
+        if "name" in missing_fields:
+            name = self._collect_name()
+            if name:
+                profile["name"] = name
+                update_child_profile({"name": name})
+
+        if "age" in missing_fields:
+            age = self._collect_age()
+            if age:
+                profile["age"] = age
+                update_child_profile({"age": age})
+
+        if "likes" in missing_fields:
+            likes = self._collect_likes()
+            if likes:
+                profile["likes"] = likes
+                update_child_profile({"likes": likes})
+
+        if profile:
+            self._reset_chat()
+            child_name = str(profile.get("name", "")).strip()
+            if child_name:
+                speak(f"Gracias, {child_name}.")
+            else:
+                speak("Gracias.")
 
     def _receive_audio(self) -> None:
         while not self._stop_event.is_set():
@@ -269,13 +497,9 @@ class NaronaAgent:
                 user_text = self._audio_queue.get(timeout=1)
                 print(f"[NARONA] User said: {user_text!r}")
 
-                # ── Interceptor local (sin API) ────────────────────────────
-                # Comandos simples como "abre Chrome" se resuelven aquí
-                # directamente con Python, sin gastar tokens del LLM.
                 if try_intercept(user_text, speak):
-                    continue  # ya fue manejado, no llamar al LLM
+                    continue
 
-                # ── Resto de comandos → LLM ────────────────────────────────
                 self._process_text(user_text)
             except queue.Empty:
                 continue
@@ -287,17 +511,21 @@ class NaronaAgent:
                 time.sleep(1)
 
     # ------------------------------------------------------------------
-    # Bucle principal con reconexión automática
+    # Bucle principal con reconexion automatica
     # ------------------------------------------------------------------
-
     def run(self) -> None:
-        """Inicia el agente y lo mantiene activo con reconexión automática."""
-        # ── Saludo inicial ────────────────────────────────────────────────────
-        # IMPORTANTE: el listener se inicia DESPUÉS del saludo para que el
-        # micrófono no capte la voz de NARONA y la reenvíe como input del usuario.
-        speak("¡Hola! ¡Soy NARONA, tu robot amigo! ¿En qué te puedo ayudar hoy?")
+        """Inicia el agente y lo mantiene activo con reconexion automatica."""
+        profile = self._sanitize_child_profile()
+        child_name = str(profile.get("name", "")).strip()
 
-        # ── Iniciar escucha continua DESPUÉS del saludo ───────────────────────
+        if child_name:
+            speak(f"Hola, {child_name}. Soy NARONA, tu robot amigo.")
+        else:
+            speak("Hola. Soy NARONA, tu robot amigo.")
+
+        self._run_profile_onboarding()
+        speak("Dime en que te puedo ayudar.")
+
         listen_thread = threading.Thread(target=self._listen_audio, daemon=True)
         listen_thread.start()
 
@@ -314,12 +542,8 @@ class NaronaAgent:
                 time.sleep(2)
                 self._chat = None
 
-        speak("¡Hasta luego! Cuídate mucho.")
+        speak("Hasta luego. Cuidate mucho.")
 
-
-# ---------------------------------------------------------------------------
-# Punto de entrada
-# ---------------------------------------------------------------------------
 
 def main():
     agent = NaronaAgent()

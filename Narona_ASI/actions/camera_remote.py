@@ -7,10 +7,10 @@ import json
 import io
 import os
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import requests
-from PIL import Image
+from PIL import Image, ImageFilter, ImageStat
 
 from vision.vision_client import analyze_image
 
@@ -42,11 +42,17 @@ def camera_remote(parameters: dict, response=None, player=None) -> str:
     save = bool(parameters.get("save", False))
     timeout = int(parameters.get("timeout", 5))
 
-    image_bytes = fetch_camera_image(timeout)
+    image_bytes, quality_issue = _capture_best_image(fetch_camera_image, timeout)
     if image_bytes is None:
-        image_bytes = fetch_local_camera_image(timeout)
+        image_bytes, local_issue = _capture_best_image(fetch_local_camera_image, timeout)
+        quality_issue = local_issue or quality_issue
 
     if image_bytes is None:
+        if quality_issue:
+            return (
+                "Pude intentar la camara, pero la imagen se ve "
+                f"{quality_issue}. Intenta con mas luz o sin mover la camara."
+            )
         return (
             "No pude obtener imagen ni del servidor de la camara "
             "ni de la camara local del dispositivo."
@@ -73,6 +79,33 @@ def fetch_camera_image(timeout: int = 5) -> Optional[bytes]:
     except Exception as exc:
         print(f"[camera_remote] Error obteniendo imagen del servidor: {exc}")
         return None
+
+
+def _capture_best_image(
+    fetcher: Callable[[int], Optional[bytes]],
+    timeout: int,
+    attempts: int = 3,
+) -> tuple[Optional[bytes], Optional[str]]:
+    """Intenta varias capturas y filtra imagenes oscuras o borrosas."""
+    last_issue = None
+
+    for attempt in range(attempts):
+        image_bytes = fetcher(timeout)
+        if image_bytes is None:
+            continue
+
+        quality_issue = _check_image_quality(image_bytes)
+        if quality_issue is None:
+            return image_bytes, None
+
+        last_issue = quality_issue
+        print(
+            f"[camera_remote] Imagen descartada por calidad ({quality_issue}). "
+            f"Reintento {attempt + 1}/{attempts}."
+        )
+        time.sleep(0.2)
+
+    return None, last_issue
 
 
 def fetch_local_camera_image(timeout: int = 5) -> Optional[bytes]:
@@ -150,6 +183,26 @@ def _is_placeholder_image(image_bytes: bytes) -> bool:
             return image.size == (1, 1)
     except Exception:
         return False
+
+
+def _check_image_quality(image_bytes: bytes) -> Optional[str]:
+    """Detecta si la imagen esta demasiado oscura o borrosa."""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            grayscale = image.convert("L")
+            brightness = ImageStat.Stat(grayscale).mean[0]
+
+            edges = grayscale.filter(ImageFilter.FIND_EDGES)
+            sharpness = ImageStat.Stat(edges).var[0]
+
+            if brightness < 28:
+                return "muy oscura"
+            if sharpness < 45:
+                return "borrosa"
+            return None
+    except Exception as exc:
+        print(f"[camera_remote] No se pudo evaluar la calidad de la imagen: {exc}")
+        return None
 
 
 # ---------------------------------------------------------------------------
