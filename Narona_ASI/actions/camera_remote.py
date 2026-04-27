@@ -1,90 +1,161 @@
 """
-actions/camera_remote.py – Petición HTTP a la Pi Zero para capturar imagen.
-Llama al servidor Flask /capture y luego analiza con vision_client.
+actions/camera_remote.py - Peticion HTTP a la Pi Zero para capturar imagen.
+Si el servidor no responde, intenta usar la camara local del dispositivo.
 """
 
 import json
+import io
 import os
 import time
 from typing import Optional
 
 import requests
+from PIL import Image
 
 from vision.vision_client import analyze_image
 
 # ---------------------------------------------------------------------------
-# Configuración
+# Configuracion
 # ---------------------------------------------------------------------------
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "api_keys.json")
 
 try:
     with open(_CONFIG_PATH, encoding="utf-8") as _f:
         _cfg = json.load(_f)
-    _PI_ZERO_IP   = _cfg.get("pi_zero_ip", "192.168.1.101")
+    _PI_ZERO_IP = _cfg.get("pi_zero_ip", "192.168.1.101")
     _PI_ZERO_PORT = int(_cfg.get("pi_zero_port", 5001))
+    _LOCAL_CAMERA_INDEX = int(_cfg.get("local_camera_index", 0))
 except Exception:
-    _PI_ZERO_IP   = "192.168.1.101"
+    _PI_ZERO_IP = "192.168.1.101"
     _PI_ZERO_PORT = 5001
+    _LOCAL_CAMERA_INDEX = 0
 
 _CAPTURE_URL = f"http://{_PI_ZERO_IP}:{_PI_ZERO_PORT}/capture"
 
 
 # ---------------------------------------------------------------------------
-# Función pública
+# Funcion publica
 # ---------------------------------------------------------------------------
-
 def camera_remote(parameters: dict, response=None, player=None) -> str:
-    """Captura una imagen de la Pi Zero y la analiza con visión.
-
-    Args:
-        parameters: dict con:
-            - text (str, requerido): pregunta o descripción para el análisis.
-            - save (bool, opcional, default False): guardar imagen en disco.
-            - timeout (int, opcional, default 5): segundos de espera HTTP.
-        response: no utilizado.
-        player: no utilizado.
-
-    Returns:
-        Descripción del análisis de la imagen.
-    """
-    question = str(parameters.get("text", "¿Qué ves en la imagen?"))
-    save     = bool(parameters.get("save", False))
-    timeout  = int(parameters.get("timeout", 5))
+    """Captura una imagen y la analiza con vision."""
+    question = str(parameters.get("text", "Que ves en la imagen?"))
+    save = bool(parameters.get("save", False))
+    timeout = int(parameters.get("timeout", 5))
 
     image_bytes = fetch_camera_image(timeout)
     if image_bytes is None:
-        return "No pude obtener imagen de la cámara."
+        image_bytes = fetch_local_camera_image(timeout)
+
+    if image_bytes is None:
+        return (
+            "No pude obtener imagen ni del servidor de la camara "
+            "ni de la camara local del dispositivo."
+        )
 
     if save:
         _save_image(image_bytes)
 
     try:
-        result = analyze_image(image_bytes, question)
-        return result
+        return analyze_image(image_bytes, question)
     except Exception as exc:
         return f"Error analizando imagen: {exc}"
 
 
 def fetch_camera_image(timeout: int = 5) -> Optional[bytes]:
-    """Captura una imagen JPEG desde el servidor de la Pi Zero.
-
-    Returns:
-        Bytes JPEG o None si falla.
-    """
+    """Captura una imagen JPEG desde el servidor de la Pi Zero."""
     try:
         resp = requests.get(_CAPTURE_URL, timeout=timeout)
         resp.raise_for_status()
+        if _is_placeholder_image(resp.content):
+            print("[camera_remote] El servidor devolvio una imagen simulada.")
+            return None
         return resp.content
     except Exception as exc:
-        print(f"[camera_remote] Error obteniendo imagen: {exc}")
+        print(f"[camera_remote] Error obteniendo imagen del servidor: {exc}")
         return None
+
+
+def fetch_local_camera_image(timeout: int = 5) -> Optional[bytes]:
+    """Captura una imagen JPEG desde la camara local del dispositivo."""
+    try:
+        import cv2  # type: ignore
+    except Exception as exc:
+        print(f"[camera_remote] OpenCV no disponible para camara local: {exc}")
+        return None
+
+    capture = None
+    backends = [None]
+    if os.name == "nt":
+        backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, None]
+
+    try:
+        for backend in backends:
+            capture = _open_local_camera(cv2, _LOCAL_CAMERA_INDEX, backend)
+            if capture is None or not capture.isOpened():
+                if capture is not None:
+                    capture.release()
+                capture = None
+                continue
+
+            deadline = time.time() + max(timeout, 1)
+            frame = None
+
+            while time.time() < deadline:
+                ok, current_frame = capture.read()
+                if ok and current_frame is not None:
+                    frame = current_frame
+                    break
+                time.sleep(0.1)
+
+            if frame is None:
+                capture.release()
+                capture = None
+                continue
+
+            ok, encoded = cv2.imencode(".jpg", frame)
+            if not ok:
+                print("[camera_remote] No se pudo codificar la imagen local a JPEG.")
+                capture.release()
+                return None
+
+            capture.release()
+            print("[camera_remote] Usando fallback de camara local.")
+            return encoded.tobytes()
+
+        print("[camera_remote] No se pudo abrir ninguna camara local.")
+        return None
+    except Exception as exc:
+        print(f"[camera_remote] Error usando camara local: {exc}")
+        return None
+    finally:
+        if capture is not None:
+            capture.release()
+
+
+def _open_local_camera(cv2_module, camera_index: int, backend) -> Optional[object]:
+    """Abre la camara local usando un backend opcional."""
+    try:
+        if backend is None:
+            return cv2_module.VideoCapture(camera_index)
+        return cv2_module.VideoCapture(camera_index, backend)
+    except Exception as exc:
+        print(f"[camera_remote] Error abriendo camara local: {exc}")
+        return None
+
+
+def _is_placeholder_image(image_bytes: bytes) -> bool:
+    """Detecta la imagen 1x1 usada por el servidor en modo simulacion."""
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            return image.size == (1, 1)
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
-
-def _save_image(image_bytes: bytes):
+def _save_image(image_bytes: bytes) -> None:
     save_dir = os.path.join(os.path.dirname(__file__), "..", "captures")
     os.makedirs(save_dir, exist_ok=True)
     filename = os.path.join(save_dir, f"capture_{int(time.time())}.jpg")
