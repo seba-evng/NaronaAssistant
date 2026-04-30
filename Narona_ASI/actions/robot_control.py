@@ -8,7 +8,8 @@ PINOUT L298N (desde config/api_keys.json → "motor_pins"):
   Motor A izquierdo  IN1=17, IN2=27, ENA=18 (PWM)
   Motor B derecho    IN3=22, IN4=23, ENB=19 (PWM)
 
-NOTA Pi 5: Asegúrate de tener lgpio instalado y GPIOZERO_PIN_FACTORY=lgpio
+Backend GPIO: usa gpiozero con LGPIOFactory (Pi 5 compatible).
+No requiere configurar la variable de entorno GPIOZERO_PIN_FACTORY.
 """
 
 import json
@@ -34,6 +35,17 @@ _PIN_ENA = int(_pins.get("ena", 18))
 _PIN_IN3 = int(_pins.get("in3", 22))
 _PIN_IN4 = int(_pins.get("in4", 23))
 _PIN_ENB = int(_pins.get("enb", 19))
+
+# ---------------------------------------------------------------------------
+# Configurar gpiozero para usar LGPIOFactory (Pi 5) directamente en código
+# sin necesidad de la variable de entorno GPIOZERO_PIN_FACTORY
+# ---------------------------------------------------------------------------
+try:
+    import gpiozero as _gz
+    from gpiozero.pins.lgpio import LGPIOFactory as _LGPIOFactory  # type: ignore
+    _gz.Device.pin_factory = _LGPIOFactory()
+except Exception as _pin_factory_exc:
+    print(f"[robot_control] Pin factory lgpio no disponible, usando default: {_pin_factory_exc}")
 
 # ---------------------------------------------------------------------------
 # Hardware GPIO

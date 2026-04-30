@@ -47,6 +47,16 @@ _RIGHT = {
 }
 
 # ---------------------------------------------------------------------------
+# Configurar gpiozero para usar LGPIOFactory (Pi 5) en código
+# ---------------------------------------------------------------------------
+try:
+    import gpiozero as _gz
+    from gpiozero.pins.lgpio import LGPIOFactory as _LGPIOFactory  # type: ignore
+    _gz.Device.pin_factory = _LGPIOFactory()
+except Exception as _e:
+    pass   # usar factory por defecto si lgpio no está disponible
+
+# ---------------------------------------------------------------------------
 # Inicialización HC-SR04
 # ---------------------------------------------------------------------------
 _DISTANCE_AVAILABLE = False

@@ -1,0 +1,41 @@
+{
+    "gemini_api_key": "TU_API_KEY",
+    "pi_zero_ip": "192.168.1.101",
+    "pi_zero_port": 5001,
+    "stt_language": "es-ES",
+    "stt_silence_after_speech": 1.0,
+    "stt_standby_timeout": 3,
+    "stt_cmd_timeout": 8,
+    "stt_cmd_phrase_limit": 12,
+    "tts_language": "es",
+    "tts_rate": 140,
+    "tts_volume": 1.0,
+    "tts_voice": "es-MX-DaliaNeural",
+    "wake_word_enabled": false,
+    "wake_words": [
+        "narona",
+        "nano",
+        "naro"
+    ],
+    "motor_pins": {
+        "in1": 17,
+        "in2": 27,
+        "ena": 18,
+        "in3": 22,
+        "in4": 23,
+        "enb": 19
+    },
+    "ultrasonic_pins": {
+        "front_trigger": 5,
+        "front_echo": 6,
+        "left_trigger": 12,
+        "left_echo": 13,
+        "right_trigger": 16,
+        "right_echo": 20
+    },
+    "i2c": {
+        "sda": 2,
+        "scl": 3,
+        "mlx90614_address": "0x5A"
+    }
+}
