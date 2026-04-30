@@ -25,7 +25,7 @@ from memory.memory_manager import (
     update_memory,
 )
 from ui.audio_input import listen_loop, listen_once
-from ui.audio_output import speak
+from ui.audio_output import speak, speak_local
 from ui.command_interceptor import try_intercept
 
 
@@ -622,7 +622,7 @@ class NaronaAgent:
                 time.sleep(2)
                 self._chat = None
 
-        speak("Hasta luego. Cuidate mucho.")
+        speak_local("Hasta luego. Cuidate mucho.")
 
 
 def main():
