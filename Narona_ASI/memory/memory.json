@@ -1,7 +1,10 @@
 {
   "child_profile": {
-    "name": "Eh Mi Nombre",
-    "age": "6"
+    "name": "Diego",
+    "age": "7"
   },
-  "last_response": "¡Super! ¿A qué te gustaría jugar, Eh Mi Nombre?"
+  "child_profile_meta": {
+    "likes_prompted": true
+  },
+  "last_response": "Mmm, no sé eso. Pero podemos buscar juntos."
 }

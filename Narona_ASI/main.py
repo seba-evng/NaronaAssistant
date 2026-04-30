@@ -21,15 +21,14 @@ from memory.memory_manager import (
     get_missing_child_profile_fields,
     load_memory,
     update_child_profile,
+    update_child_profile_meta,
     update_memory,
 )
 from ui.audio_input import listen_loop, listen_once
 from ui.audio_output import speak
 from ui.command_interceptor import try_intercept
 
-# ---------------------------------------------------------------------------
-# Configuracion
-# ---------------------------------------------------------------------------
+
 _BASE_DIR = os.path.dirname(__file__)
 _CONFIG_PATH = os.path.join(_BASE_DIR, "config", "api_keys.json")
 _PROMPT_PATH = os.path.join(_BASE_DIR, "core", "prompt.txt")
@@ -41,9 +40,6 @@ with open(_PROMPT_PATH, encoding="utf-8") as _f:
     _SYSTEM_PROMPT = _f.read().strip()
 
 
-# ---------------------------------------------------------------------------
-# TOOL_DECLARATIONS - sin IMU
-# ---------------------------------------------------------------------------
 TOOL_DECLARATIONS = [
     {
         "name": "robot_control",
@@ -144,9 +140,6 @@ class NaronaAgent:
         self._audio_queue: queue.Queue = queue.Queue()
         self._stop_event = threading.Event()
 
-    # ------------------------------------------------------------------
-    # Herramientas internas
-    # ------------------------------------------------------------------
     def _execute_tool(self, fc) -> str:
         """Despacha una FunctionCall al modulo Python correspondiente."""
         name = fc.name
@@ -187,9 +180,6 @@ class NaronaAgent:
 
         return f"Herramienta desconocida: {name}"
 
-    # ------------------------------------------------------------------
-    # Ciclo de conversacion
-    # ------------------------------------------------------------------
     def _build_system_prompt(self) -> str:
         """Construye el system prompt con memoria actualizada."""
         memory = load_memory()
@@ -209,34 +199,56 @@ class NaronaAgent:
         text = re.sub(r"\s+", " ", text)
         return text.strip()
 
-    def _normalize_name(self, value) -> str:
-        """Extrae solo el nombre de respuestas como 'me llamo Diego'."""
-        text = self._clean_text(value)
-        lowered = text.lower()
+    def _remove_leading_fillers(self, value: str) -> str:
+        """Elimina muletillas comunes al inicio de una frase."""
+        return re.sub(
+            r"^(?:eh+|emm+|mmm+|este+|pues|hola|oye|a ver)\s+",
+            "",
+            value.strip(),
+            flags=re.IGNORECASE,
+        )
 
-        prefixes = [
-            "me llamo ",
-            "mi nombre es ",
-            "soy ",
-            "yo soy ",
-            "me dicen ",
-            "yo me llamo ",
-        ]
-        for prefix in prefixes:
-            if lowered.startswith(prefix):
-                text = text[len(prefix):].strip()
-                break
+    def _normalize_name(self, value) -> str:
+        """Extrae solo un nombre limpio desde texto libre."""
+        text = self._remove_leading_fillers(self._clean_text(value))
+        match = re.search(
+            r"\b(?:yo\s+me\s+llamo|me\s+llamo|mi\s+nombre\s+es|me\s+dicen|yo\s+soy|soy)\s+(.+)$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            text = match.group(1).strip()
+
+        stopwords = {
+            "mi",
+            "nombre",
+            "es",
+            "llamo",
+            "me",
+            "dicen",
+            "soy",
+            "yo",
+            "actualiza",
+            "cambia",
+            "modifica",
+            "corrige",
+            "por",
+            "favor",
+        }
 
         tokens = []
         for token in text.split():
             clean_token = re.sub(r"[^A-Za-zÁÉÍÓÚáéíóúÑñÜü-]", "", token)
-            if clean_token:
-                tokens.append(clean_token)
+            if not clean_token:
+                continue
+            if clean_token.lower() in stopwords:
+                continue
+            tokens.append(clean_token)
 
-        if not tokens:
+        if not tokens or len(tokens) > 3:
             return ""
 
-        return " ".join(token.capitalize() for token in tokens[:3])
+        return " ".join(token.capitalize() for token in tokens)
 
     def _normalize_age(self, value) -> str:
         """Extrae una edad valida desde texto libre."""
@@ -310,6 +322,67 @@ class NaronaAgent:
 
         return likes[:5]
 
+    def _apply_profile_update_from_text(self, user_text: str) -> bool:
+        """Detecta cambios explicitos del perfil y los guarda antes del LLM."""
+        text = self._remove_leading_fillers(self._clean_text(user_text))
+        lowered = text.lower()
+
+        if not re.search(r"\b(actualiza|cambia|modifica|corrige)\b", lowered):
+            return False
+
+        updates = {}
+
+        name_match = re.search(
+            r"\b(?:actualiza|cambia|modifica|corrige)\s+mi\s+nombre\s+(?:a|por)\s+(.+)$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if name_match:
+            name = self._normalize_name(name_match.group(1))
+            if name:
+                updates["name"] = name
+
+        age_match = re.search(
+            r"\b(?:actualiza|cambia|modifica|corrige)\s+mi\s+edad\s+(?:a|por)\s+(.+)$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if age_match:
+            age = self._normalize_age(age_match.group(1))
+            if age:
+                updates["age"] = age
+
+        likes_match = re.search(
+            r"\b(?:actualiza|cambia|modifica|corrige)\s+(?:mis\s+gustos|lo\s+que\s+me\s+gusta)\s+(?:a|por)\s+(.+)$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if likes_match:
+            likes = self._normalize_likes(likes_match.group(1))
+            if likes:
+                updates["likes"] = likes
+
+        if not updates:
+            return False
+
+        update_child_profile(updates)
+        if "likes" in updates:
+            update_child_profile_meta({"likes_prompted": True})
+        self._reset_chat()
+
+        confirmations = []
+        if "name" in updates:
+            confirmations.append(f"tu nombre ahora es {updates['name']}")
+        if "age" in updates:
+            confirmations.append(f"tu edad ahora es {updates['age']}")
+        if "likes" in updates:
+            confirmations.append("ya guarde tus gustos nuevos")
+
+        message = "Listo, " + " y ".join(confirmations) + "."
+        speak(message)
+        update_memory({"last_response": message})
+        return True
+
     def _sanitize_child_profile(self) -> dict:
         """Limpia el perfil guardado y elimina datos invalidos."""
         memory = load_memory()
@@ -324,7 +397,7 @@ class NaronaAgent:
             sanitized_profile["name"] = name
         if age:
             sanitized_profile["age"] = age
-        if len(likes) >= 3:
+        if likes:
             sanitized_profile["likes"] = likes
 
         if sanitized_profile != profile:
@@ -412,7 +485,7 @@ class NaronaAgent:
         for attempt in range(2):
             speak(prompt)
             time.sleep(1.0)
-            answer = listen_once(timeout=timeout, phrase_limit=phrase_limit).strip()
+            answer = listen_once(timeout=timeout, phrase_limit=phrase_limit, notify=True).strip()
             if answer:
                 print(f"[NARONA] Perfil captado: {answer!r}")
                 return answer
@@ -448,6 +521,7 @@ class NaronaAgent:
     def _collect_likes(self) -> list[str]:
         """Pregunta gustos una sola vez y guarda solo si hay al menos tres."""
         answer = self._collect_profile_value("Dime tres cosas que te gusten mucho.")
+        update_child_profile_meta({"likes_prompted": True})
         likes = self._normalize_likes(answer)
         if len(likes) >= 3:
             return likes
@@ -500,6 +574,9 @@ class NaronaAgent:
                 if try_intercept(user_text, speak):
                     continue
 
+                if self._apply_profile_update_from_text(user_text):
+                    continue
+
                 self._process_text(user_text)
             except queue.Empty:
                 continue
@@ -510,13 +587,14 @@ class NaronaAgent:
                 traceback.print_exc()
                 time.sleep(1)
 
-    # ------------------------------------------------------------------
-    # Bucle principal con reconexion automatica
-    # ------------------------------------------------------------------
     def run(self) -> None:
         """Inicia el agente y lo mantiene activo con reconexion automatica."""
+        from actions.robot_control import robot_greet
+
         profile = self._sanitize_child_profile()
         child_name = str(profile.get("name", "")).strip()
+        greeting_motion = robot_greet()
+        print(f"[NARONA] Greeting motion: {greeting_motion}")
 
         if child_name:
             speak(f"Hola, {child_name}. Soy NARONA, tu robot amigo.")
