@@ -62,12 +62,16 @@ TOOL_DECLARATIONS = [
         "name": "sensor_read",
         "description": (
             "Lee sensores fisicos del robot. "
-            "Usalo para medir la distancia a obstaculos o la temperatura del entorno."
+            "Mide distancia con los 3 HC-SR04 (frontal, izquierdo, derecho) "
+            "o la temperatura del entorno con el MLX90614."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "sensor": {"type": "STRING", "description": "distance | temperature | all (default: distance)"},
+                "sensor": {
+                    "type": "STRING",
+                    "description": "distance (frontal) | front | left | right | temperature | all (default: distance)",
+                },
             },
             "required": ["sensor"],
         },
@@ -589,12 +593,10 @@ class NaronaAgent:
 
     def run(self) -> None:
         """Inicia el agente y lo mantiene activo con reconexion automatica."""
-        from actions.robot_control import robot_greet
-
         profile = self._sanitize_child_profile()
         child_name = str(profile.get("name", "")).strip()
-        greeting_motion = robot_greet()
-        print(f"[NARONA] Greeting motion: {greeting_motion}")
+        # TODO: aqui irá el movimiento de saludo de los servomotores (brazo)
+        print("[NARONA] Saludo de servos pendiente de implementar.")
 
         if child_name:
             speak(f"Hola, {child_name}. Soy NARONA, tu robot amigo.")

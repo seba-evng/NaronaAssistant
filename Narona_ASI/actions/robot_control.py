@@ -1,6 +1,14 @@
 """
-actions/robot_control.py - Control del robot por GPIO o ESP32 por serial.
-Acciones: forward, backward, left, right, stop.
+actions/robot_control.py – Control de motores L298N en Raspberry Pi 5.
+
+Modo actual: movimiento directo sin lectura de sensores.
+(Los sensores HC-SR04 se habilitarán en una fase posterior.)
+
+PINOUT L298N (desde config/api_keys.json → "motor_pins"):
+  Motor A izquierdo  IN1=17, IN2=27, ENA=18 (PWM)
+  Motor B derecho    IN3=22, IN4=23, ENB=19 (PWM)
+
+NOTA Pi 5: Asegúrate de tener lgpio instalado y GPIOZERO_PIN_FACTORY=lgpio
 """
 
 import json
@@ -9,7 +17,7 @@ import threading
 import time
 
 # ---------------------------------------------------------------------------
-# Configuracion
+# Configuración
 # ---------------------------------------------------------------------------
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "api_keys.json")
 
@@ -19,135 +27,150 @@ try:
 except Exception:
     _cfg = {}
 
-_SERIAL_PORT = str(_cfg.get("esp32_serial_port", "COM3")).strip()
-_SERIAL_BAUDRATE = int(_cfg.get("esp32_baudrate", 115200))
-_GREETING_COMMAND = str(_cfg.get("esp32_greeting_command", "saludo")).strip() or "saludo"
+_pins    = _cfg.get("motor_pins", {})
+_PIN_IN1 = int(_pins.get("in1", 17))
+_PIN_IN2 = int(_pins.get("in2", 27))
+_PIN_ENA = int(_pins.get("ena", 18))
+_PIN_IN3 = int(_pins.get("in3", 22))
+_PIN_IN4 = int(_pins.get("in4", 23))
+_PIN_ENB = int(_pins.get("enb", 19))
 
 # ---------------------------------------------------------------------------
-# Guard GPIO
+# Hardware GPIO
 # ---------------------------------------------------------------------------
 _GPIO_AVAILABLE = False
-_left_motor = None
-_right_motor = None
+_in1 = _in2 = _ena = None
+_in3 = _in4 = _enb = None
 
 try:
-    from gpiozero import Motor  # type: ignore
+    from gpiozero import OutputDevice, PWMOutputDevice  # type: ignore
 
-    _pins = _cfg.get("motor_pins", {})
-    _left_motor = Motor(forward=_pins["left_forward"], backward=_pins["left_backward"])
-    _right_motor = Motor(forward=_pins["right_forward"], backward=_pins["right_backward"])
+    _in1 = OutputDevice(_PIN_IN1, initial_value=False)
+    _in2 = OutputDevice(_PIN_IN2, initial_value=False)
+    _ena = PWMOutputDevice(_PIN_ENA, initial_value=0)
+    _in3 = OutputDevice(_PIN_IN3, initial_value=False)
+    _in4 = OutputDevice(_PIN_IN4, initial_value=False)
+    _enb = PWMOutputDevice(_PIN_ENB, initial_value=0)
+
     _GPIO_AVAILABLE = True
+    print(
+        f"[robot_control] ✅ L298N listo — "
+        f"MotorA(IN1={_PIN_IN1}, IN2={_PIN_IN2}, ENA={_PIN_ENA}) | "
+        f"MotorB(IN3={_PIN_IN3}, IN4={_PIN_IN4}, ENB={_PIN_ENB})"
+    )
 except Exception as exc:
-    print(f"[robot_control] GPIO no disponible (modo simulacion): {exc}")
+    print(f"[robot_control] GPIO no disponible (modo simulación): {exc}")
+
+# Señal global para interrumpir movimiento en curso ("para")
+_stop_movement = threading.Event()
+
 
 # ---------------------------------------------------------------------------
-# Guard serial ESP32
+# Primitivas de motor
 # ---------------------------------------------------------------------------
-_SERIAL_AVAILABLE = False
-_serial_module = None
-_esp32 = None
-_serial_lock = threading.Lock()
 
-try:
-    import serial as _serial_module  # type: ignore
-
-    _SERIAL_AVAILABLE = True
-except Exception as exc:
-    print(f"[robot_control] pyserial no disponible: {exc}")
+def _motor_a(forward: bool, speed: float) -> None:
+    if forward:
+        _in1.on();  _in2.off()
+    else:
+        _in1.off(); _in2.on()
+    _ena.value = speed
 
 
-def _ensure_serial_connection() -> bool:
-    """Abre la conexion serial al ESP32 si hace falta."""
-    global _esp32
-
-    if not _SERIAL_AVAILABLE or not _SERIAL_PORT:
-        return False
-
-    with _serial_lock:
-        if _esp32 is not None and getattr(_esp32, "is_open", False):
-            return True
-
-        try:
-            _esp32 = _serial_module.Serial(_SERIAL_PORT, _SERIAL_BAUDRATE, timeout=1)
-            time.sleep(2.0)
-            print(f"[robot_control] ESP32 serial conectado en {_SERIAL_PORT}.")
-            return True
-        except Exception as exc:
-            print(f"[robot_control] No se pudo abrir {_SERIAL_PORT}: {exc}")
-            _esp32 = None
-            return False
+def _motor_b(forward: bool, speed: float) -> None:
+    if forward:
+        _in3.on();  _in4.off()
+    else:
+        _in3.off(); _in4.on()
+    _enb.value = speed
 
 
-def _send_serial_command(command: str) -> str:
-    """Envia un comando simple al ESP32."""
-    if not command.strip():
-        return "Comando vacio."
-
-    if not _ensure_serial_connection():
-        return f"[simulacion] serial -> {command}"
-
-    try:
-        payload = (command.strip() + "\n").encode("utf-8")
-        with _serial_lock:
-            _esp32.write(payload)
-            _esp32.flush()
-        return f"Comando serial enviado: {command}"
-    except Exception as exc:
-        return f"Error enviando comando serial: {exc}"
-
-
-def robot_greet() -> str:
-    """Mueve el saludo inicial en el ESP32 si esta configurado."""
-    return _send_serial_command(_GREETING_COMMAND)
-
-
-def robot_control(parameters: dict, response=None, player=None) -> str:
-    """Controla los motores del robot."""
-    action = str(parameters.get("action", "stop")).lower()
-    speed = float(parameters.get("speed", 0.5))
-    duration = float(parameters.get("duration", 1.0))
-
-    speed = max(0.0, min(1.0, speed))
-    duration = max(0.0, duration)
-
-    if _ensure_serial_connection():
-        try:
-            result = _send_serial_command(action)
-            if action != "stop":
-                time.sleep(duration)
-                _send_serial_command("stop")
-            return f"{result} ({duration}s)."
-        except Exception as exc:
-            return f"Error en robot_control serial: {exc}"
-
-    if not _GPIO_AVAILABLE:
-        return f"[simulacion] robot_control: action={action}, speed={speed}, duration={duration}s"
-
-    try:
-        _apply_action(action, speed)
-        if action != "stop":
-            time.sleep(duration)
-            _apply_action("stop", 0.0)
-        return f"Accion '{action}' completada ({duration}s a velocidad {speed})."
-    except Exception as exc:
-        return f"Error en robot_control: {exc}"
+def _stop_all() -> None:
+    _in1.off(); _in2.off(); _ena.value = 0
+    _in3.off(); _in4.off(); _enb.value = 0
 
 
 def _apply_action(action: str, speed: float) -> None:
     if action == "forward":
-        _left_motor.forward(speed)
-        _right_motor.forward(speed)
+        _motor_a(True,  speed); _motor_b(True,  speed)
     elif action == "backward":
-        _left_motor.backward(speed)
-        _right_motor.backward(speed)
+        _motor_a(False, speed); _motor_b(False, speed)
     elif action == "left":
-        _left_motor.backward(speed)
-        _right_motor.forward(speed)
+        _motor_a(False, speed); _motor_b(True,  speed)
     elif action == "right":
-        _left_motor.forward(speed)
-        _right_motor.backward(speed)
+        _motor_a(True,  speed); _motor_b(False, speed)
     elif action == "stop":
-        _left_motor.stop()
-        _right_motor.stop()
+        _stop_all()
     else:
-        raise ValueError(f"Accion desconocida: {action}")
+        raise ValueError(f"Acción desconocida: '{action}'")
+
+
+# ---------------------------------------------------------------------------
+# Movimiento simple (sin sensores)
+# ---------------------------------------------------------------------------
+
+def _move(action: str, speed: float, duration: float) -> str:
+    """Ejecuta el movimiento durante *duration* segundos respetando la señal de parada."""
+    _stop_movement.clear()
+    _apply_action(action, speed)
+
+    elapsed = 0.0
+    while elapsed < duration:
+        if _stop_movement.is_set():
+            _stop_all()
+            return "¡Paré! Me detuve como me pediste. 🛑"
+        time.sleep(0.1)
+        elapsed += 0.1
+
+    _stop_all()
+    dir_es = {
+        "forward":  "adelante",
+        "backward": "hacia atrás",
+        "left":     "a la izquierda",
+        "right":    "a la derecha",
+    }.get(action, action)
+    return f"¡Listo! Me moví {dir_es} durante {elapsed:.0f} segundos. ✅"
+
+
+# ---------------------------------------------------------------------------
+# Función pública
+# ---------------------------------------------------------------------------
+
+def robot_control(parameters: dict, response=None, player=None) -> str:
+    """Controla los motores del robot NARONA.
+
+    Parámetros:
+        action   (str)   – forward | backward | left | right | stop
+        speed    (float) – 0.0–1.0  (default 0.5)
+        duration (float) – segundos (default 3.0)
+    """
+    action   = str(parameters.get("action",   "stop")).lower().strip()
+    speed    = float(parameters.get("speed",   0.5))
+    duration = float(parameters.get("duration", 3.0))
+
+    speed    = max(0.0, min(1.0, speed))
+    duration = max(0.0, duration)
+
+    if action == "stop":
+        _stop_movement.set()
+        if _GPIO_AVAILABLE:
+            _stop_all()
+        return "¡Me detuve! 🛑"
+
+    if not _GPIO_AVAILABLE:
+        dir_es = {
+            "forward":  "adelante",
+            "backward": "hacia atrás",
+            "left":     "a la izquierda",
+            "right":    "a la derecha",
+        }.get(action, action)
+        return (
+            f"[simulación] Movería el robot {dir_es}, "
+            f"velocidad {int(speed * 100)}%, durante {duration:.0f}s."
+        )
+
+    try:
+        return _move(action, speed, duration)
+    except Exception as exc:
+        _stop_all()
+        return f"Error en robot_control: {exc}"
