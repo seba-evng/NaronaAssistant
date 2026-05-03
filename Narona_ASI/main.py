@@ -627,12 +627,52 @@ class NaronaAgent:
                 time.sleep(2)
                 self._chat = None
 
-        speak_local("Hasta luego. Cuidate mucho.")
+        self._speak_farewell()
+
+
+    def _speak_farewell(self) -> None:
+        """
+        Pide a Gemini una despedida unica y la reproduce con speak() (edge-tts,
+        misma voz que todo el sistema).
+
+        Cada sesion genera una despedida diferente gracias al LLM.
+        Si la API no responde o el chat no estaba activo, usa una frase local.
+        """
+        fallback = "Hasta luego. Fue un placer estar contigo hoy."
+        try:
+            if self._chat is None:
+                speak(fallback)
+                return
+
+            response = self._chat.send_message(
+                "[SISTEMA] El programa se cierra ahora. "
+                "Genera una despedida corta, calida y original para el nino. "
+                "Debe ser diferente cada vez: usa frases nuevas, variadas y amigables. "
+                "Sin emojis. Maximo 2 frases breves."
+            )
+            farewell = ""
+            try:
+                farewell = (response.text or "").strip()
+            except Exception:
+                if response.candidates:
+                    for c in response.candidates:
+                        if c.content and c.content.parts:
+                            for p in c.content.parts:
+                                if hasattr(p, "text") and p.text:
+                                    farewell += p.text
+                farewell = farewell.strip()
+
+            speak(farewell if farewell else fallback)
+
+        except Exception as exc:
+            print(f"[NARONA] Despedida Gemini fallida ({exc}), usando fallback.")
+            speak(fallback)
 
 
 def main():
     agent = NaronaAgent()
     agent.run()
+
 
 
 if __name__ == "__main__":
