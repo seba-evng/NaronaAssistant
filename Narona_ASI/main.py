@@ -51,9 +51,14 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action": {"type": "STRING", "description": "forward | backward | left | right | stop"},
-                "speed": {"type": "NUMBER", "description": "Velocidad 0.0-1.0 (default 0.5)"},
-                "duration": {"type": "NUMBER", "description": "Duracion en segundos (default 1.0)"},
+                "action": {
+        "type": "STRING",
+        "description": (
+            "forward | backward | left | right | spin_left | spin_right | stop | celebrate. "
+            "Usa 'celebrate' cuando el niño quiera celebrar, festejar, gritar de alegría "
+            "o pedir que levantes los brazos."
+        ),
+    },
             },
             "required": ["action"],
         },
@@ -595,8 +600,8 @@ class NaronaAgent:
         """Inicia el agente y lo mantiene activo con reconexion automatica."""
         profile = self._sanitize_child_profile()
         child_name = str(profile.get("name", "")).strip()
-        # TODO: aqui irá el movimiento de saludo de los servomotores (brazo)
-        print("[NARONA] Saludo de servos pendiente de implementar.")
+        from actions.robot_control import startup_greeting
+        startup_greeting()
 
         if child_name:
             speak(f"Hola, {child_name}. Soy NARONA, tu robot amigo.")

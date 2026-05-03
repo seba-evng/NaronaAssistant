@@ -20,10 +20,8 @@
     "motor_pins": {
         "in1": 17,
         "in2": 27,
-        "ena": 18,
-        "in3": 22,
-        "in4": 23,
-        "enb": 19
+        "in3": 23,
+        "in4": 24
     },
     "ultrasonic_pins": {
         "front_trigger": 5,
