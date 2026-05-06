@@ -1,58 +1,21 @@
 """
-actions/open_app.py – Abre aplicaciones en Windows/Linux/macOS.
-Patrón: misma firma (parameters, response, player) que todas las actions.
+actions/open_app.py – Lanzador del juego Godot creado por el equipo.
+
+Solo existe una acción posible: abrir el juego ubicado en el Desktop
+de la Raspberry Pi 5 con el comando ./JuegoFinalV2.arm64 --fullscreen.
+
+Gemini llama a esta herramienta cuando el niño dice frases como:
+  "Quiero jugar", "Juguemos", "Tengo ganas de jugar", etc.
 """
 
+import os
 import subprocess
-import sys
 
 
-# Mapa de nombres comunes → comandos en cada plataforma
-_APP_MAP_WINDOWS = {
-    "whatsapp":   "start whatsapp:",
-    "chrome":     "start chrome",
-    "firefox":    "start firefox",
-    "spotify":    "start spotify:",
-    "notepad":    "notepad",
-    "calculadora":"calc",
-    "calculator": "calc",
-    "paint":      "mspaint",
-    "minecraft":  "start minecraft:",
-    "youtube":    "start https://www.youtube.com",
-    "netflix":    "start https://www.netflix.com",
-    "vlc":        "start vlc",
-    "word":       "start winword",
-    "excel":      "start excel",
-    "powerpoint": "start powerpnt",
-    "explorer":   "explorer",
-    "task manager": "taskmgr",
-    "administrador de tareas": "taskmgr",
-    "bloc de notas": "notepad",
-}
-
-_APP_MAP_LINUX = {
-    "chrome":   "google-chrome",
-    "firefox":  "firefox",
-    "spotify":  "spotify",
-    "vlc":      "vlc",
-    "calculator": "gnome-calculator",
-    "calculadora": "gnome-calculator",
-}
-
-_APP_MAP_MACOS = {
-    "chrome":   "open -a 'Google Chrome'",
-    "firefox":  "open -a Firefox",
-    "spotify":  "open -a Spotify",
-    "vlc":      "open -a VLC",
-    "calculator": "open -a Calculator",
-    "calculadora": "open -a Calculator",
-}
-
-
-def _get_platform() -> str:
-    if sys.platform == "win32":  return "windows"
-    if sys.platform == "darwin": return "macos"
-    return "linux"
+# Ruta al ejecutable del juego en la Raspberry Pi 5
+_GAME_DIR  = os.path.expanduser("~/Desktop")
+_GAME_BIN  = "./JuegoFinalV2.arm64"
+_GAME_ARGS = ["--fullscreen"]
 
 
 def open_app(
@@ -61,47 +24,29 @@ def open_app(
     player=None,
 ) -> str:
     """
-    Abre una aplicación en el sistema operativo.
+    Lanza el juego Godot del equipo en la Raspberry Pi 5.
 
-    Parámetros:
-        app_name : str  Nombre de la app (required).
-        platform : str  "windows" | "linux" | "macos" (default: auto-detectado).
-
-    Returns:
-        str: Mensaje de resultado.
+    Devuelve un mensaje que Gemini usa para confirmar al niño que
+    el juego está abriendo.
     """
-    params   = parameters or {}
-    app_name = params.get("app_name", "").strip()
-    platform = params.get("platform", _get_platform()).lower().strip()
+    print(f"[OpenApp] 🎮 Lanzando juego desde {_GAME_DIR}")
 
-    if not app_name:
-        return "No se especificó ninguna aplicación."
-
-    app_lower = app_name.lower()
-    print(f"[OpenApp] 🚀 Abriendo: {app_name!r}  (plataforma: {platform})")
-
-    # Buscar en el mapa de apps conocidas
-    if platform == "windows":
-        cmd = _APP_MAP_WINDOWS.get(app_lower)
-        if cmd is None:
-            # Intentar directamente como nombre de ejecutable
-            cmd = f"start {app_name}"
-    elif platform == "macos":
-        cmd = _APP_MAP_MACOS.get(app_lower)
-        if cmd is None:
-            cmd = f"open -a '{app_name}'"
-    else:  # linux
-        cmd = _APP_MAP_LINUX.get(app_lower)
-        if cmd is None:
-            # Usar el nombre tal cual (conocido o fallback)
-            cmd = app_lower
+    # Verificar que el ejecutable existe antes de intentar correrlo
+    game_path = os.path.join(_GAME_DIR, "JuegoFinalV2.arm64")
+    if not os.path.exists(game_path):
+        msg = f"No encontré el juego en {game_path}. Asegúrate de que JuegoFinalV2.arm64 esté en el Desktop."
+        print(f"[OpenApp] ❌ {msg}")
+        return f"juego_no_encontrado: {msg}"
 
     try:
-        subprocess.Popen(cmd, shell=True)
-
-        print(f"[OpenApp] ✅ Lanzado: {cmd}")
-        return f"¡Abrí {app_name} ahora mismo! 🚀"
+        subprocess.Popen(
+            [_GAME_BIN] + _GAME_ARGS,
+            cwd=_GAME_DIR,
+            # No bloquea — el juego corre en segundo plano
+        )
+        print("[OpenApp] ✅ Juego lanzado correctamente.")
+        return "juego_iniciado: JuegoFinalV2 abierto en pantalla completa."
 
     except Exception as exc:
-        print(f"[OpenApp] ❌ Error: {exc}")
-        return f"No pude abrir {app_name}: {exc}"
+        print(f"[OpenApp] ❌ Error al lanzar el juego: {exc}")
+        return f"error_al_abrir_juego: {exc}"

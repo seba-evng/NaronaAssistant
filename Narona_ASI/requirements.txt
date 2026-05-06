@@ -1,5 +1,5 @@
-# LLM via OpenRouter (API compatible con OpenAI)
-openai>=1.30.0
+# LLM via Google Gemini (GenAI SDK)
+google-genai>=1.0.0
 SpeechRecognition>=3.10.0
 pyttsx3>=2.90
 pyaudio>=0.2.14

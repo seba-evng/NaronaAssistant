@@ -105,23 +105,17 @@ TOOL_DECLARATIONS = [
     {
         "name": "open_app",
         "description": (
-            "Abre una aplicacion, programa o juego en la computadora. "
-            "Usala cuando el nino pida abrir cualquier app. "
-            "SIEMPRE llama esta herramienta, nunca digas que abriste algo sin llamarla."
+            "Abre el juego del robot NARONA. "
+            "Llamala SIEMPRE que el nino quiera jugar, sin importar como lo diga: "
+            "'quiero jugar', 'juguemos', 'tengo ganas de jugar', 'abre el juego', "
+            "'pon el juego', 'vamos a jugar', 'me aburro quiero jugar', etc. "
+            "NO la llames para abrir otras apps: solo existe este juego. "
+            "NUNCA digas que abriste el juego sin llamar esta herramienta primero."
         ),
         "parameters": {
             "type": "OBJECT",
-            "properties": {
-                "app_name": {
-                    "type": "STRING",
-                    "description": "Nombre de la aplicacion a abrir, por ejemplo: WhatsApp, Chrome, Spotify, Minecraft",
-                },
-                "platform": {
-                    "type": "STRING",
-                    "description": "Sistema operativo: windows (default) | linux | macos",
-                },
-            },
-            "required": ["app_name"],
+            "properties": {},
+            "required": [],
         },
     },
     {

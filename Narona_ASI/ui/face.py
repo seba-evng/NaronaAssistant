@@ -273,23 +273,34 @@ def _run_loop() -> None:
 
     try:
         pygame.init()
-        screen = pygame.display.set_mode((800, 400))
+
+        # ── Fullscreen: obtener resolución real de la pantalla ──────────────
+        info   = pygame.display.Info()
+        SCR_W  = info.current_w
+        SCR_H  = info.current_h
+        screen = pygame.display.set_mode((SCR_W, SCR_H), pygame.FULLSCREEN)
         pygame.display.set_caption("NARONA")
+        pygame.mouse.set_visible(False)          # ocultar cursor en kiosko
         clock  = pygame.time.Clock()
+
+        # ── Posiciones y tamaños responsivos ────────────────────────────────
+        # Los ojos se distribuyen en el centro vertical y separan
+        # horizontalmente en tercios de la pantalla.
+        EYE_R  = int(min(SCR_W, SCR_H) * 0.16)  # radio ~ 16% del lado menor
+        EYE_Y  = SCR_H // 2
+        L_EYE  = (SCR_W // 3,      EYE_Y)
+        R_EYE  = (SCR_W * 2 // 3,  EYE_Y)
 
         WHITE      = (240, 240, 255)
         LIGHT_BLUE = (180, 220, 240)
-        L_EYE      = (250, 200)
-        R_EYE      = (550, 200)
-        EYE_R      = 80
 
-        # Pre-cargar imagen de escucha
+        # ── Pre-cargar imagen de escucha escalada a fullscreen ───────────────
         _listen_surf = None
         try:
             img_path = os.path.join(_ASSETS_DIR, "Escucha.jpg")
             if os.path.exists(img_path):
                 raw = pygame.image.load(img_path)
-                _listen_surf = pygame.transform.scale(raw, (800, 400))
+                _listen_surf = pygame.transform.scale(raw, (SCR_W, SCR_H))
                 print("[face] Escucha.jpg cargada.")
             else:
                 print(f"[face] Escucha.jpg no encontrada en {img_path}")
@@ -331,6 +342,10 @@ def _run_loop() -> None:
                 if event.type == pygame.QUIT:
                     _running = False
                     break
+                # Permitir salir con Escape en desarrollo
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    _running = False
+                    break
 
             now = time.time()
 
@@ -346,9 +361,9 @@ def _run_loop() -> None:
                 else:
                     # Fallback visual si falta el asset
                     screen.fill((30, 60, 90))
-                    font = pygame.font.SysFont(None, 48)
+                    font = pygame.font.SysFont(None, max(36, SCR_H // 15))
                     txt  = font.render("Escuchando...", True, (240, 240, 255))
-                    screen.blit(txt, (280, 180))
+                    screen.blit(txt, txt.get_rect(center=(SCR_W // 2, SCR_H // 2)))
                 pygame.display.flip()
                 clock.tick(60)
                 continue
@@ -403,3 +418,4 @@ def _run_loop() -> None:
         except Exception:
             pass
         print("[face] Ventana cerrada.")
+
