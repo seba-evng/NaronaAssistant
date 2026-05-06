@@ -26,7 +26,9 @@ from memory.memory_manager import (
 )
 from ui.audio_input import listen_loop, listen_once
 from ui.audio_output import speak, speak_local
-from ui.command_interceptor import try_intercept
+from ui.command_interceptor import try_intercept, is_shutdown_requested
+from ui.wake_word import detect_wake_word, strip_wake_word
+import ui.face as face
 
 
 _BASE_DIR = os.path.dirname(__file__)
@@ -38,6 +40,8 @@ with open(_CONFIG_PATH, encoding="utf-8") as _f:
 
 with open(_PROMPT_PATH, encoding="utf-8") as _f:
     _SYSTEM_PROMPT = _f.read().strip()
+
+_WAKE_WORD_ENABLED: bool = bool(_cfg.get("wake_word_enabled", False))
 
 
 TOOL_DECLARATIONS = [
@@ -136,6 +140,28 @@ TOOL_DECLARATIONS = [
             "required": ["goal"],
         },
     },
+    {
+        "name": "face_emotion",
+        "description": (
+            "Cambia la expresion de los ojos animados de NARONA. "
+            "Llamala SIEMPRE antes de responder para que la cara refleje el tono de tu respuesta."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "emotion": {
+                    "type": "STRING",
+                    "description": (
+                        "normal   → conversacion regular.\n"
+                        "feliz    → logro, buena noticia, celebracion, alegria.\n"
+                        "triste   → pena, algo malo, el nino esta triste.\n"
+                        "confuso  → no entiendo, pregunta rara, situacion inesperada."
+                    ),
+                },
+            },
+            "required": ["emotion"],
+        },
+    },
 ]
 
 
@@ -186,6 +212,9 @@ class NaronaAgent:
                     return result
                 time.sleep(0.5)
             return "La tarea esta en progreso pero tardara mas de lo esperado."
+
+        if name == "face_emotion":
+            return face.set_emotion(str(params.get("emotion", "normal")))
 
         return f"Herramienta desconocida: {name}"
 
@@ -418,12 +447,21 @@ class NaronaAgent:
     def _process_text(self, user_text: str) -> None:
         try:
             if self._chat is None:
+                try:
+                    thinking_cfg = types.ThinkingConfig(thinking_budget=0)
+                except Exception:
+                    thinking_cfg = None
+
+                cfg_kwargs = dict(
+                    system_instruction=self._build_system_prompt(),
+                    tools=[{"function_declarations": TOOL_DECLARATIONS}],
+                )
+                if thinking_cfg is not None:
+                    cfg_kwargs["thinking_config"] = thinking_cfg
+
                 self._chat = self._client.chats.create(
                     model=self._model_name,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self._build_system_prompt(),
-                        tools=[{"function_declarations": TOOL_DECLARATIONS}],
-                    ),
+                    config=types.GenerateContentConfig(**cfg_kwargs),
                 )
 
             response = self._chat.send_message(user_text)
@@ -464,7 +502,7 @@ class NaronaAgent:
                         for candidate in response.candidates:
                             if candidate.content and candidate.content.parts:
                                 for part in candidate.content.parts:
-                                    if hasattr(part, "text") and part.text:
+                                    if hasattr(part, "text") and part.text and not getattr(part, "thought", False):
                                         text += part.text
 
                 text = text.strip()
@@ -481,6 +519,7 @@ class NaronaAgent:
             traceback.print_exc()
             self._chat = None
 
+
     def _listen_audio(self) -> None:
         """Bucle STT que pone texto en la cola de audio."""
 
@@ -492,10 +531,13 @@ class NaronaAgent:
     def _collect_profile_value(self, prompt: str, timeout: int = 8, phrase_limit: int = 8) -> str:
         """Pregunta un dato del perfil y escucha una respuesta breve."""
         for attempt in range(2):
+            face.notify_message()   # evita que la cara se duerma durante onboarding
             speak(prompt)
             time.sleep(1.0)
+            face.notify_message()   # reinicia tras el TTS para que no cuente ese tiempo
             answer = listen_once(timeout=timeout, phrase_limit=phrase_limit, notify=True).strip()
             if answer:
+                face.notify_message()   # el niño respondió → cara despierta
                 print(f"[NARONA] Perfil captado: {answer!r}")
                 return answer
             if attempt == 0:
@@ -518,7 +560,7 @@ class NaronaAgent:
     def _collect_age(self) -> str:
         """Pregunta la edad hasta obtener un numero valido."""
         for attempt in range(3):
-            answer = self._collect_profile_value("Cuantos anos tienes?")
+            answer = self._collect_profile_value("Cuantos años tienes?")
             age = self._normalize_age(answer)
             if age:
                 return age
@@ -537,7 +579,7 @@ class NaronaAgent:
         return []
 
     def _run_profile_onboarding(self) -> None:
-        """Pregunta datos del nino solo si faltan en memoria."""
+        """Pregunta datos del niño solo si faltan en memoria."""
         self._sanitize_child_profile()
         memory = load_memory()
         missing_fields = get_missing_child_profile_fields(memory)
@@ -545,6 +587,8 @@ class NaronaAgent:
             return
 
         profile = get_child_profile(memory)
+        face.notify_message()   # cara despierta antes de la conversación de onboarding
+        face.set_emotion("normal")
         speak("Quiero conocerte un poquito.")
         time.sleep(0.5)
 
@@ -569,6 +613,7 @@ class NaronaAgent:
         if profile:
             self._reset_chat()
             child_name = str(profile.get("name", "")).strip()
+            face.notify_message()   # perfil guardado → cara activa para conversación normal
             if child_name:
                 speak(f"Gracias, {child_name}.")
             else:
@@ -579,14 +624,74 @@ class NaronaAgent:
             try:
                 user_text = self._audio_queue.get(timeout=1)
                 print(f"[NARONA] User said: {user_text!r}")
+                face.notify_message()   # reinicia contador de inactividad
 
+                # 1. Shutdown / interceptores rápidos (volumen, apagado)
                 if try_intercept(user_text, speak):
+                    if is_shutdown_requested():
+                        self._stop_event.set()
                     continue
 
+                # 2. Wake word (si está habilitado en config)
+                if _WAKE_WORD_ENABLED:
+                    detected, matched = detect_wake_word(user_text)
+                    if detected:
+                        # ¿El comando viene en el mismo utterance? (ej. "narona ve adelante")
+                        inline_cmd = strip_wake_word(user_text).strip()
+                        if len(inline_cmd) >= 4 and len(inline_cmd.split()) >= 2:
+                            # Comando embebido → procesar directamente (sin necesitar segundo utterance)
+                            print(f"[NARONA] Wake+comando inline: {inline_cmd!r}")
+                            face.notify_message()
+                            if not self._apply_profile_update_from_text(inline_cmd):
+                                self._process_text(inline_cmd)
+                        else:
+                            # Solo wake word → modo escucha activa
+                            face.show_listening()
+
+                            # 1) Pequeño delay para que SonidoNoti.mp3 suene completo
+                            #    y para que listen_loop capture y descarte el eco del sonido
+                            time.sleep(0.9)
+
+                            # 2) Drenar items residuales del buffer (ecos, ruido del sonido)
+                            _drained = 0
+                            while True:
+                                try:
+                                    self._audio_queue.get_nowait()
+                                    _drained += 1
+                                except queue.Empty:
+                                    break
+                            if _drained:
+                                print(f"[NARONA] Descartados {_drained} items residuales del buffer")
+
+                            # 3) Esperar el comando REAL del usuario (máx 7 segundos)
+                            #    El comando va directo al LLM — NO necesita decir "narona" de nuevo
+                            try:
+                                cmd = self._audio_queue.get(timeout=7)
+                            except queue.Empty:
+                                cmd = ""
+
+                            face.hide_listening()
+
+                            if cmd and len(cmd) >= 3:
+                                print(f"[NARONA] Comando tras wake word: {cmd!r}")
+                                face.notify_message()
+                                # Va DIRECTO al LLM sin pasar por detección de wake word
+                                if not self._apply_profile_update_from_text(cmd):
+                                    self._process_text(cmd)
+                            else:
+                                print("[NARONA] Wake word sin comando válido, ignorando.")
+                    else:
+                        # Wake word NO detectado → ignorar silenciosamente
+                        print(f"[NARONA] Sin wake word, ignorado: {user_text!r}")
+                    continue  # ← siempre saltear steps 3/4 cuando el modo está activo
+
+                # 3. Perfil del niño
                 if self._apply_profile_update_from_text(user_text):
                     continue
 
+                # 4. LLM
                 self._process_text(user_text)
+
             except queue.Empty:
                 continue
             except KeyboardInterrupt:
@@ -598,6 +703,7 @@ class NaronaAgent:
 
     def run(self) -> None:
         """Inicia el agente y lo mantiene activo con reconexion automatica."""
+        face.start()   # abre la ventana de ojos animados
         profile = self._sanitize_child_profile()
         child_name = str(profile.get("name", "")).strip()
         from actions.robot_control import startup_greeting

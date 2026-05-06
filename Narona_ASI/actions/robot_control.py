@@ -297,12 +297,12 @@ def robot_control(parameters: dict, response=None, player=None) -> str:
             _stop_all()
         return "movimiento_detenido: el robot se detuvo correctamente."
 
-    # Modo simulación
+    # Modo simulación (sin GPIO): mismo formato que movimiento real → Gemini responde natural
     if not _GPIO_AVAILABLE:
-        return (
-            f"simulacion: el robot se movería {_DIR_ES.get(action, action)} "
-            f"durante {min(duration, _MAX_DURATION):.1f} segundos. GPIO no disponible."
-        )
+        action_es = _DIR_ES.get(action, action)
+        dur = min(duration, _MAX_DURATION)
+        return f"movimiento_completado: el robot se movió {action_es} durante {dur:.1f} segundos."
+
 
     # Movimiento real
     try:

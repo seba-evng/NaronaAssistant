@@ -1,5 +1,5 @@
 {
-    "gemini_api_key": "TU_API_KEY",
+    "gemini_api_key": "AIzaSyAXk6pWwJOhL_ODsCiO2SKL1Jm2XkvRBbQ",
     "pi_zero_ip": "192.168.1.101",
     "pi_zero_port": 5001,
     "stt_language": "es-ES",
@@ -11,7 +11,7 @@
     "tts_rate": 140,
     "tts_volume": 1.0,
     "tts_voice": "es-MX-DaliaNeural",
-    "wake_word_enabled": false,
+    "wake_word_enabled": true,
     "wake_words": [
         "narona",
         "nano",

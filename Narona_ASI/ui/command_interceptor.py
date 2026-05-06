@@ -176,107 +176,29 @@ _MUTE_PATTERN = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Vocabulario de movimiento para niños (sin tokens)
+# Patrón de apagado por voz
 # ---------------------------------------------------------------------------
+_SHUTDOWN_PATTERN = re.compile(
+    r"""(?:
+        apágate | apagate | apágate | apágate\.? |
+        ciérrate | cierrate |
+        duermen |
+        apa(?:ga|ga\s+ya|ga\s+te) |
+        adiós | adios | bye | chao | chau |
+        hasta\s+luego | hasta\s+pronto | hasta\s+mañana | hasta\s+manana |
+        nos\s+vemos | me\s+voy | me\s+tengo\s+que\s+ir
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
 
-# ── Adelante ────────────────────────────────────────────────────────────────
-_FORWARD_WORDS = {
-    "avanza", "adelante", "hacia adelante", "para adelante",
-    "muévete", "muvete", "anda", "camina", "ve", "vete",
-    "muévete para adelante", "muévete hacia adelante",
-    "ve para adelante", "ve hacia adelante", "sigue",
-    "sigue adelante", "mueve",
-}
-
-# ── Atrás ───────────────────────────────────────────────────────────────────
-_BACKWARD_WORDS = {
-    "atrás", "atras", "hacia atrás", "para atrás",
-    "retrocede", "regresa", "ve para atrás", "vete para atrás",
-    "muévete para atrás", "muévete hacia atrás",
-    "ve hacia atrás", "da marcha atrás",
-}
-
-# ── Izquierda ────────────────────────────────────────────────────────────────
-_LEFT_WORDS = {
-    "izquierda", "a la izquierda", "hacia la izquierda",
-    "gira izquierda", "gira a la izquierda",
-    "voltea izquierda", "voltea a la izquierda",
-    "ve a la izquierda", "muévete a la izquierda",
-    "dobla a la izquierda", "tuerce a la izquierda",
-}
-
-# ── Derecha ──────────────────────────────────────────────────────────────────
-_RIGHT_WORDS = {
-    "derecha", "a la derecha", "hacia la derecha",
-    "gira derecha", "gira a la derecha",
-    "voltea derecha", "voltea a la derecha",
-    "ve a la derecha", "muévete a la derecha",
-    "dobla a la derecha", "tuerce a la derecha",
-}
-
-# ── Parar ────────────────────────────────────────────────────────────────────
-_STOP_WORDS = {
-    "para", "detente", "alto", "frena", "para ya",
-    "quédate quieto", "quedate quieto", "no te muevas",
-    "stop", "quieto", "estáte quieto", "estate quieto",
-}
-
-# Modificadores de velocidad
-_SPEED_FAST = {"rápido", "rapido", "rápidamente", "veloz", "corre", "deprisa", "aprisa"}
-_SPEED_SLOW = {"despacio", "despacito", "lento", "lentamente", "suave", "poquito", "poco"}
-
-# Modificadores de duración
-_DURATION_SHORT = {"un momento", "un poquito", "tantito", "un segundito", "un poco"}
-_DURATION_LONG  = {"bastante", "mucho", "un buen rato", "rato"}
+# Flag para que main.py sepa que debe cerrar
+_shutdown_flag = False
 
 
-def _parse_move(text: str):
-    """
-    Analiza el texto y extrae (action, speed, duration) o None si no es movimiento.
+def is_shutdown_requested() -> bool:
+    """Devuelve True si el interceptor detectó una orden de apagado."""
+    return _shutdown_flag
 
-    Prioridad de detección: stop > direcciones específicas.
-    La velocidad y duración se ajustan por modificadores de palabras clave.
-
-    Returns:
-        (action, speed, duration) o None si no es un comando de movimiento.
-    """
-    lower = text.lower().strip()
-
-    # ── STOP (prioridad máxima) ───────────────────────────────────────────────
-    if any(w in lower for w in _STOP_WORDS):
-        return "stop", 0.0, 0.0
-
-    # ── Detectar dirección ───────────────────────────────────────────────────
-    action = None
-    if any(w in lower for w in _BACKWARD_WORDS):
-        action = "backward"
-    elif any(w in lower for w in _LEFT_WORDS):
-        action = "left"
-    elif any(w in lower for w in _RIGHT_WORDS):
-        action = "right"
-    elif any(w in lower for w in _FORWARD_WORDS):
-        action = "forward"
-
-    if action is None:
-        return None
-
-    # ── Velocidad ─────────────────────────────────────────────────────────────
-    if any(w in lower for w in _SPEED_FAST):
-        speed = 0.85
-    elif any(w in lower for w in _SPEED_SLOW):
-        speed = 0.30
-    else:
-        speed = 0.55   # velocidad normal
-
-    # ── Duración ─────────────────────────────────────────────────────────────
-    if any(w in lower for w in _DURATION_SHORT):
-        duration = 1.5
-    elif any(w in lower for w in _DURATION_LONG):
-        duration = 5.0
-    else:
-        duration = 3.0   # 3 segundos por defecto
-
-    return action, speed, duration
 
 # ---------------------------------------------------------------------------
 # Helpers de volumen (Windows, sin pip)
@@ -490,44 +412,18 @@ def try_intercept(text: str, speak: Callable[[str], None]) -> bool:
         return True
 
     # ══════════════════════════════════════════════════════════════════════
-    # 6. MOVIMIENTO DEL ROBOT (0 tokens)
+    # 6. APAGADO POR VOZ
     # ══════════════════════════════════════════════════════════════════════
-    move = _parse_move(text)
-    if move is not None:
-        action, speed, duration = move
-        print(f"[Interceptor] 🤖 Movimiento: action={action}, speed={speed}, duration={duration}s")
-
-        from actions.robot_control import robot_control, _stop_movement
-
-        if action == "stop":
-            # Señal inmediata de parada para interrumpir movimiento en curso
-            _stop_movement.set()
-            result = robot_control({"action": "stop"}, None, None)
-            speak(result)
-            return True
-
-        # Aviso antes de mover (para niños)
-        dir_es = {
-            "forward":  "adelante",
-            "backward": "hacia atrás",
-            "left":     "a la izquierda",
-            "right":    "a la derecha",
-        }.get(action, action)
-        speak(f"¡Vamos {dir_es}!")
-
-        # Ejecutar movimiento (bloqueante con evasión de obstáculos)
-        result = robot_control(
-            {"action": action, "speed": speed, "duration": duration},
-            None, None,
-        )
-        speak(result)
-        return True
+    if _SHUTDOWN_PATTERN.search(text):
+        global _shutdown_flag
+        _shutdown_flag = True
+        print("[Interceptor] 🔴 Apagado por voz detectado.")
+        return True   # main.py detecta _shutdown_flag y lanza despedida + cierre
 
     # ══════════════════════════════════════════════════════════════════════
     # Aquí puedes añadir más interceptores en el futuro:
     #   _WEATHER_PATTERN → openweathermap API
     #   _JOKE_PATTERN    → lista de chistes locales
-    #   _SONG_PATTERN    → controlar Spotify vía subprocess
     # ══════════════════════════════════════════════════════════════════════
 
     return False   # no interceptado → pasar al LLM
