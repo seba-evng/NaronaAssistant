@@ -1,5 +1,5 @@
 {
-    "gemini_api_key": "AIzaSyAXk6pWwJOhL_ODsCiO2SKL1Jm2XkvRBbQ",
+    "gemini_api_key": "TU_API_KEY",
     "pi_zero_ip": "192.168.1.101",
     "pi_zero_port": 5001,
     "stt_language": "es-ES",
